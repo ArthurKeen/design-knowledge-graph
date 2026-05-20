@@ -23,13 +23,33 @@ from config_temporal import TEMPORAL_GRAPH_NAME, ARANGO_DATABASE
 def create_graph(db):
     cols = {c["name"] for c in db.collections() if not c["name"].startswith("_")}
 
-    golden_entity_cols = sorted(c for c in cols if c.endswith("_Golden_Entities"))
-    entity_cols        = sorted(c for c in cols if c.endswith("_Entities"))
-    community_cols     = sorted(c for c in cols if c.endswith("_Communities"))
-    chunk_cols         = sorted(c for c in cols if c.endswith("_Chunks"))
-    relation_cols      = sorted(c for c in cols if c.endswith("_Relations") and not c.endswith("_Golden_Relations"))
-    golden_rel_cols    = sorted(c for c in cols if c.endswith("_Golden_Relations"))
-    doc_cols           = sorted(c for c in cols if c.endswith("_Documents"))
+    # Restrict GraphRAG collection discovery to our known repo prefixes to
+    # avoid accidentally absorbing foreign *_Entities/*_Relations/etc.
+    # collections that a managed cluster may pre-seed (observed on fresh
+    # ArangoGraph Pilot databases, e.g. a stray RISC1200_* graph).
+    try:
+        import yaml  # noqa: WPS433
+        registry_path = os.path.join(
+            os.path.dirname(__file__), "..", "multi_repo", "repo_registry.yaml"
+        )
+        with open(registry_path, "r", encoding="utf-8") as f:
+            registry = yaml.safe_load(f) or {}
+        prefixes = tuple(
+            r["prefix"] for r in (registry.get("repos") or []) if r.get("prefix")
+        )
+    except Exception:
+        prefixes = ("OR1200_", "MOR1KX_", "MAROCCHINO_", "IBEX_")
+
+    def _ours(c: str) -> bool:
+        return c.startswith(prefixes)
+
+    golden_entity_cols = sorted(c for c in cols if _ours(c) and c.endswith("_Golden_Entities"))
+    entity_cols        = sorted(c for c in cols if _ours(c) and c.endswith("_Entities"))
+    community_cols     = sorted(c for c in cols if _ours(c) and c.endswith("_Communities"))
+    chunk_cols         = sorted(c for c in cols if _ours(c) and c.endswith("_Chunks"))
+    relation_cols      = sorted(c for c in cols if _ours(c) and c.endswith("_Relations") and not c.endswith("_Golden_Relations"))
+    golden_rel_cols    = sorted(c for c in cols if _ours(c) and c.endswith("_Golden_Relations"))
+    doc_cols           = sorted(c for c in cols if _ours(c) and c.endswith("_Documents"))
 
     rtl_vertex_cols = [c for c in ["RTL_Module", "RTL_Port", "RTL_Signal",
                                     "RTL_Parameter", "RTL_LogicChunk"] if c in cols]
@@ -48,6 +68,11 @@ def create_graph(db):
             "from_vertex_collections": [c for c in ["RTL_Module"] if c in cols],
             "to_vertex_collections":   [c for c in ["DesignEpoch"] if c in cols],
         },
+        {
+            "edge_collection": "PRECEDES_EPOCH",
+            "from_vertex_collections": [c for c in ["DesignEpoch"] if c in cols],
+            "to_vertex_collections":   [c for c in ["DesignEpoch"] if c in cols],
+        } if "PRECEDES_EPOCH" in cols else None,
         # ── RTL structural edges ─────────────────────────────────────────
         {
             "edge_collection": "HAS_PORT",
@@ -107,12 +132,23 @@ def create_graph(db):
             "from_vertex_collections": cross_vertex_cols,
             "to_vertex_collections":   cross_vertex_cols,
         },
+        # ── Author expertise ─────────────────────────────────────────────
+        {
+            "edge_collection": "AUTHORED",
+            "from_vertex_collections": [c for c in ["Author"] if c in cols],
+            "to_vertex_collections":   [c for c in ["GitCommit"] if c in cols],
+        },
+        {
+            "edge_collection": "MAINTAINS",
+            "from_vertex_collections": [c for c in ["Author"] if c in cols],
+            "to_vertex_collections":   [c for c in ["RTL_Module"] if c in cols],
+        },
     ]
 
     # Drop edge definitions where from/to ended up empty (collection doesn't exist yet)
     edge_definitions = [
         ed for ed in edge_definitions
-        if ed["from_vertex_collections"] and ed["to_vertex_collections"]
+        if ed and ed["from_vertex_collections"] and ed["to_vertex_collections"]
     ]
 
     # Per-repo GraphRAG Golden relation edges

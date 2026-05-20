@@ -4,18 +4,18 @@
       {
         "title": "[0] DB Health Check",
         "databaseName": "ic-knowledge-graph-temporal",
-        "content": "RETURN {\n  GitCommit: LENGTH(GitCommit),\n  RTL_Module: LENGTH(RTL_Module),\n  DesignEpoch: LENGTH(DesignEpoch),\n  DesignSituation: LENGTH(DesignSituation),\n  BELONGS_TO_EPOCH: LENGTH(BELONGS_TO_EPOCH),\n  CROSS_REPO_SIMILAR_TO: LENGTH(CROSS_REPO_SIMILAR_TO),\n  CROSS_REPO_EVOLVED_FROM: LENGTH(CROSS_REPO_EVOLVED_FROM),\n  OR1200_entities: LENGTH(OR1200_Entities),\n  MOR1KX_entities: LENGTH(MOR1KX_Entities),\n  IBEX_entities: LENGTH(IBEX_Entities),\n  MAROCCHINO_entities: LENGTH(MAROCCHINO_Entities)\n}",
+        "content": "RETURN {\n  GitCommit: LENGTH(GitCommit),\n  RTL_Module: LENGTH(RTL_Module),\n  DesignEpoch: LENGTH(DesignEpoch),\n  DesignSituation: LENGTH(DesignSituation),\n  Author: LENGTH(Author),\n  AUTHORED: LENGTH(AUTHORED),\n  MAINTAINS: LENGTH(MAINTAINS),\n  RESOLVED_TO: LENGTH(RESOLVED_TO),\n  CROSS_REPO_SIMILAR_TO: LENGTH(CROSS_REPO_SIMILAR_TO),\n  CROSS_REPO_EVOLVED_FROM: LENGTH(CROSS_REPO_EVOLVED_FROM),\n  OR1200_golden: LENGTH(OR1200_Golden_Entities),\n  MOR1KX_golden: LENGTH(MOR1KX_Golden_Entities),\n  IBEX_golden: LENGTH(IBEX_Golden_Entities),\n  MAROCCHINO_golden: LENGTH(MAROCCHINO_Golden_Entities)\n}",
         "bindVariables": {},
-        "description": "Pre-demo sanity check. Expected: 3796 commits, 6404 modules, 381 epochs, 721 situations.",
+        "description": "Pre-demo sanity check. Expected: 3796 commits, 6404 modules, 381 epochs, 721 situations, 137 authors, 214 RESOLVED_TO, 72 cross-repo bridges.",
         "createdAt": "2026-03-25T00:00:00.000Z",
         "updatedAt": "2026-03-25T00:00:00.000Z"
       },
       {
         "title": "[1a] The Living Graph — Scope Overview",
         "databaseName": "ic-knowledge-graph-temporal",
-        "content": "LET repos = (\n  FOR c IN GitCommit\n    COLLECT r = c.repo WITH COUNT INTO n\n    RETURN {repo: r, commits: n}\n)\nLET epochs = (FOR e IN DesignEpoch COLLECT r = e.repo WITH COUNT INTO n RETURN {repo: r, epochs: n})\nRETURN {\n  total_commits:  SUM(repos[*].commits),\n  total_modules:  LENGTH(RTL_Module),\n  total_epochs:   LENGTH(DesignEpoch),\n  total_situations: LENGTH(DesignSituation),\n  by_repo: repos\n}",
+        "content": "LET repos = (\n  FOR c IN GitCommit\n    COLLECT r = c.repo WITH COUNT INTO n\n    RETURN {repo: r, commits: n}\n)\nRETURN {\n  total_commits:    SUM(repos[*].commits),\n  total_modules:    LENGTH(RTL_Module),\n  total_epochs:     LENGTH(DesignEpoch),\n  total_situations: LENGTH(DesignSituation),\n  total_authors:    LENGTH(Author),\n  semantic_bridges: LENGTH(RESOLVED_TO),\n  cross_repo_links: LENGTH(CROSS_REPO_SIMILAR_TO),\n  by_repo: repos\n}",
         "bindVariables": {},
-        "description": "Scene 1 opener. Shows the scope: 4 repos, 3796 commits, 6404 modules, 381 epochs spanning 30 years.",
+        "description": "Scene 1 opener. Shows the scope: 4 repos, 3796 commits, 6404 modules, 381 epochs, 137 authors, 214 semantic bridges spanning 30 years.",
         "createdAt": "2026-03-25T00:00:00.000Z",
         "updatedAt": "2026-03-25T00:00:00.000Z"
       },
@@ -110,20 +110,20 @@
         "updatedAt": "2026-03-25T00:00:00.000Z"
       },
       {
-        "title": "[T1] Module Time-Travel — mor1kx_cpu_cappuccino (Graph View)",
+        "title": "[T1] Module Time-Travel — MOR1KX Core Modules at Birth vs v5.1 (Graph View)",
         "databaseName": "ic-knowledge-graph-temporal",
-        "content": "FOR epoch IN DesignEpoch\n  FILTER epoch.repo == 'openrisc/mor1kx.git'\n    AND epoch.epoch_type == 'milestone_tag'\n  SORT epoch.start_ts ASC\n  LET snap = FIRST(\n    FOR mod IN INBOUND epoch BELONGS_TO_EPOCH\n      FILTER mod.label == 'mor1kx_cpu_cappuccino'\n      SORT mod.valid_from_ts DESC\n      LIMIT 1\n      RETURN mod\n  )\n  FILTER snap != null\n  FOR epoch2, e, p IN 1..1 OUTBOUND snap BELONGS_TO_EPOCH\n    FILTER epoch2._id == epoch._id\n    RETURN p",
+        "content": "LET core_modules = ['mor1kx_dcache', 'mor1kx_icache', 'mor1kx_cpu', 'mor1kx_execute_alu', 'mor1kx_decode']\nLET dates = [1327622400, 1641600000]\n\nFOR T IN dates\n  FOR label IN core_modules\n    LET snap = FIRST(\n      FOR m IN RTL_Module\n        FILTER m.label == label AND m.repo == 'openrisc/mor1kx.git'\n        FILTER m.valid_from_ts <= T AND m.valid_to_ts > T\n        LIMIT 1 RETURN m\n    )\n    FILTER snap != null\n    LET best_epoch = FIRST(\n      FOR ep IN OUTBOUND snap BELONGS_TO_EPOCH\n        SORT ABS(ep.start_ts - T) ASC LIMIT 1 RETURN ep\n    )\n    FILTER best_epoch != null\n    FOR ep2, e, p IN 1..1 OUTBOUND snap BELONGS_TO_EPOCH\n      FILTER ep2._id == best_epoch._id\n      RETURN p",
         "bindVariables": {},
-        "description": "Visualizer: mor1kx_cpu_cappuccino across 4 milestones (2013→2022). Run → Graph tab. Hover nodes for file_hash evolution.",
+        "description": "Visualizer: 5 core MOR1KX modules (dcache, icache, cpu, alu, decode) at birth (2012) vs v5.1 (2022). Two epoch clusters with shared modules bridging 10 years.",
         "createdAt": "2026-03-25T00:00:00.000Z",
         "updatedAt": "2026-03-25T00:00:00.000Z"
       },
       {
-        "title": "[T2] Design Snapshot — MOR1KX 5.0.r2 (Graph View)",
+        "title": "[T2] Design Snapshot — MOR1KX v5.1 Release (Graph View)",
         "databaseName": "ic-knowledge-graph-temporal",
-        "content": "FOR v, e, p IN 1..1 INBOUND 'DesignEpoch/6cb4a54f1b52ca81' BELONGS_TO_EPOCH\n  RETURN p",
+        "content": "FOR v, e, p IN 1..1 INBOUND 'DesignEpoch/70f4715e0bdddbca' BELONGS_TO_EPOCH\n  RETURN p",
         "bindVariables": {},
-        "description": "Visualizer: all 76 modules active at MOR1KX 5.0.r2 (Dec 2017). Run → Graph tab shows epoch hub with 76 spokes.",
+        "description": "Visualizer: 29 modules modified in the MOR1KX v5.1 release epoch (Jan 2022). Run → Graph tab shows epoch hub with module spokes.",
         "createdAt": "2026-03-25T00:00:00.000Z",
         "updatedAt": "2026-03-25T00:00:00.000Z"
       },
@@ -182,13 +182,58 @@
         "updatedAt": "2026-03-25T00:00:00.000Z"
       },
       {
-        "title": "[DT1] Deep Traversal — 4-Hop Semantic Bridge (Graph View)",
+        "title": "[TT-1] Time Travel — MOR1KX Birth vs v5.1 (Graph View)",
         "databaseName": "ic-knowledge-graph-temporal",
-        "content": "FOR v, e, p IN 4..4\n    ANY 'OR1200_Golden_Entities/OR1200_g_666d09e70959'\n    GRAPH 'IC_Temporal_Knowledge_Graph'\n    OPTIONS { uniqueVertices: 'path', order: 'bfs' }\n    FILTER REGEX_REPLACE(p.edges[0]._id, '/.*', '') == 'OR1200_Golden_Relations'\n    FILTER REGEX_REPLACE(p.edges[1]._id, '/.*', '') == 'CROSS_REPO_SIMILAR_TO'\n    FILTER REGEX_REPLACE(p.edges[2]._id, '/.*', '') == 'RESOLVED_TO'\n    FILTER REGEX_REPLACE(p.edges[3]._id, '/.*', '') == 'HAS_SIGNAL'\n    FILTER p.vertices[1].name == 'Debug unit'\n    RETURN p",
+        "content": "LET T_birth = 1327622400\nLET T_v51   = 1641600000\n\nFOR T IN [T_birth, T_v51]\n  FOR mod IN RTL_Module\n    FILTER mod.repo == 'openrisc/mor1kx.git'\n    FILTER mod.valid_from_ts <= T AND mod.valid_to_ts > T\n    LET best_epoch = FIRST(\n      FOR ep IN OUTBOUND mod BELONGS_TO_EPOCH\n        SORT ABS(ep.start_ts - T) ASC LIMIT 1 RETURN ep\n    )\n    FILTER best_epoch != null\n    FOR ep2, e, p IN 1..1 OUTBOUND mod BELONGS_TO_EPOCH\n      FILTER ep2._id == best_epoch._id\n      RETURN p",
         "bindVariables": {},
-        "description": "Visualizer: OR1200 spec → Debug unit → IBEX Debug Mode → RTL signal → ibex_core. A single cross-repo semantic bridge path.",
+        "description": "Visualizer: two-era comparison. Birth (19 modules, 2012) vs v5.1 (48 modules, 2022). Graph shows two epoch clusters — shared modules bridge them.",
+        "createdAt": "2026-04-13T00:00:00.000Z",
+        "updatedAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "title": "[TT-2] Time Travel — IBEX Naming Eras: PULP → zeroriscy → ibex (Graph View)",
+        "databaseName": "ic-knowledge-graph-temporal",
+        "content": "LET T_pulp = 1451606400\nLET T_zero = 1514764800\nLET T_ibex = 1559347200\n\nFOR T IN [T_pulp, T_zero, T_ibex]\n  FOR mod IN RTL_Module\n    FILTER mod.repo == 'lowRISC/ibex.git'\n    FILTER mod.valid_from_ts <= T AND mod.valid_to_ts > T\n    LET best_epoch = FIRST(\n      FOR ep IN OUTBOUND mod BELONGS_TO_EPOCH\n        SORT ABS(ep.start_ts - T) ASC LIMIT 1 RETURN ep\n    )\n    FILTER best_epoch != null\n    FOR ep2, e, p IN 1..1 OUTBOUND mod BELONGS_TO_EPOCH\n      FILTER ep2._id == best_epoch._id\n      RETURN p",
+        "bindVariables": {},
+        "description": "Visualizer: IBEX's three naming eras. PULP (2016, generic names) → zeroriscy (2018, all renamed) → ibex (2019, renamed again). 62 paths across 3 clusters.",
+        "createdAt": "2026-04-13T00:00:00.000Z",
+        "updatedAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "title": "[TT-3] Time Travel — Module Births & Deaths (Graph View)",
+        "databaseName": "ic-knowledge-graph-temporal",
+        "content": "LET T1 = 1327622400\nLET T2 = 1641600000\n\nLET at_T1 = (FOR m IN RTL_Module\n  FILTER m.repo == 'openrisc/mor1kx.git' AND m.valid_from_ts <= T1 AND m.valid_to_ts > T1\n  RETURN DISTINCT m.label)\n\nLET at_T2 = (FOR m IN RTL_Module\n  FILTER m.repo == 'openrisc/mor1kx.git' AND m.valid_from_ts <= T2 AND m.valid_to_ts > T2\n  RETURN DISTINCT m.label)\n\nLET removed = MINUS(at_T1, at_T2)\nLET born = MINUS(at_T2, at_T1)\n\nFOR label IN UNION(removed, SLICE(born, 0, 10))\n  LET snap = FIRST(\n    FOR m IN RTL_Module\n      FILTER m.label == label AND m.repo == 'openrisc/mor1kx.git'\n      SORT m.valid_from_ts ASC LIMIT 1 RETURN m\n  )\n  FILTER snap != null\n  LET epoch = FIRST(FOR e IN OUTBOUND snap BELONGS_TO_EPOCH LIMIT 1 RETURN e)\n  FILTER epoch != null\n  FOR ep2, e, p IN 1..1 OUTBOUND snap BELONGS_TO_EPOCH\n    FILTER ep2._id == epoch._id\n    RETURN p",
+        "bindVariables": {},
+        "description": "Visualizer: modules that were born or died between T1 and T2, connected to their introduction epochs. Default: MOR1KX birth → v5.1 (10 removed + 10 new = 20 paths).",
+        "createdAt": "2026-04-13T00:00:00.000Z",
+        "updatedAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "title": "[DT1] Deep Traversal — Instruction Fetch Subunit Cross-Repo (Graph View)",
+        "databaseName": "ic-knowledge-graph-temporal",
+        "content": "FOR v, e, p IN 2..3\n  ANY 'OR1200_Golden_Entities/OR1200_g_2eeeeaacece8'\n  GRAPH 'IC_Temporal_Knowledge_Graph'\n  OPTIONS { uniqueVertices: 'path' }\n  LET edge_cols = (FOR edge IN p.edges RETURN PARSE_IDENTIFIER(edge._id).collection)\n  FILTER 'CROSS_REPO_SIMILAR_TO' IN edge_cols\n  LIMIT 25\n  RETURN p",
+        "bindVariables": {},
+        "description": "Visualizer: OR1200 Instruction Fetch Subunit (6 cross-repo bridges) → related entities in IBEX, MOR1KX, MAROCCHINO. Shows how one 2001 spec concept survives across 4 repos.",
         "createdAt": "2026-03-25T00:00:00.000Z",
         "updatedAt": "2026-03-25T00:00:00.000Z"
+      },
+      {
+        "title": "[6a] Author Expertise — Top Maintainers",
+        "databaseName": "ic-knowledge-graph-temporal",
+        "content": "FOR a IN Author\n  LET maintained = (\n    FOR m IN 1..1 OUTBOUND a MAINTAINS\n      RETURN DISTINCT m.label\n  )\n  LET commit_repos = (\n    FOR c IN 1..1 OUTBOUND a AUTHORED\n      RETURN DISTINCT c.repo\n  )\n  FILTER LENGTH(maintained) > 0\n  SORT LENGTH(maintained) DESC\n  LIMIT 15\n  RETURN {\n    author: a.name,\n    modules_maintained: LENGTH(maintained),\n    repos: commit_repos,\n    sample_modules: maintained[0..4]\n  }",
+        "bindVariables": {},
+        "description": "Scene 6. Who maintains what? Top 15 authors by module ownership. Shows cross-repo expertise.",
+        "createdAt": "2026-04-13T00:00:00.000Z",
+        "updatedAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "title": "[6b] Author Expertise — Module Ownership (Graph View)",
+        "databaseName": "ic-knowledge-graph-temporal",
+        "content": "LET top_author = FIRST(\n  FOR a IN Author\n    LET cnt = LENGTH(FOR m IN 1..1 OUTBOUND a MAINTAINS RETURN 1)\n    SORT cnt DESC LIMIT 1 RETURN a\n)\nFOR v, e, p IN 1..2 OUTBOUND top_author MAINTAINS, BELONGS_TO_EPOCH\n  LIMIT 100\n  RETURN p",
+        "bindVariables": {},
+        "description": "Visualizer: top maintainer → their modules → design epochs. Run → Graph tab. Shows one expert's footprint across the codebase.",
+        "createdAt": "2026-04-13T00:00:00.000Z",
+        "updatedAt": "2026-04-13T00:00:00.000Z"
       },
       {
         "title": "[DT2] Deep Traversal — Cross-Repo Subgraph (Graph View)",
@@ -198,6 +243,15 @@
         "description": "Visualizer: 25 cross-repo paths (3–4 hops) from OR1200:Debug unit. Reaches IBEX, MAROCCHINO RTL and spec concepts.",
         "createdAt": "2026-03-25T00:00:00.000Z",
         "updatedAt": "2026-03-25T00:00:00.000Z"
+      },
+      {
+        "title": "[Evolution] Module Temporal Sequence (Graph View — Query Editor)",
+        "databaseName": "ic-knowledge-graph-temporal",
+        "content": "LET module_name = \"mor1kx_cpu\"\nLET module_repo = \"openrisc/mor1kx.git\"\n\nLET snapshots = (\n  FOR m IN RTL_Module\n    FILTER m.label == module_name AND m.repo == module_repo\n    COLLECT year = DATE_YEAR(m.valid_from_ts * 1000) INTO grp = m\n    SORT year ASC\n    LET representative = FIRST(\n      FOR s IN grp SORT s.valid_from_ts ASC LIMIT 1 RETURN s\n    )\n    LET epoch = FIRST(\n      FOR ep IN OUTBOUND representative BELONGS_TO_EPOCH\n        SORT ABS(ep.start_ts - representative.valid_from_ts) ASC\n        LIMIT 1 RETURN ep\n    )\n    LET epoch_edge = FIRST(\n      FOR ep, e IN 1..1 OUTBOUND representative BELONGS_TO_EPOCH\n        FILTER ep._id == epoch._id RETURN e\n    )\n    RETURN { snap: representative, epoch: epoch, epoch_edge: epoch_edge, year: year }\n)\n\nFOR i IN 0..LENGTH(snapshots)-2\n  LET curr = snapshots[i]\n  LET next = snapshots[i+1]\n  LET days = ROUND((next.snap.valid_from_ts - curr.snap.valid_from_ts) / 86400)\n  LET timeline_edge = {\n    _key: CONCAT(\"ev_\", curr.snap._key, \"_\", next.snap._key),\n    _id: CONCAT(\"PRECEDES_EPOCH/ev_\", curr.snap._key, \"_\", next.snap._key),\n    _from: curr.snap._id,\n    _to: next.snap._id,\n    label: CONCAT(TO_STRING(days), \" days\"),\n    type: \"EVOLVED_TO\",\n    time_gap_days: days\n  }\n  LET verts = UNIQUE(APPEND(\n    [curr.snap, next.snap],\n    APPEND(\n      curr.epoch != null ? [curr.epoch] : [],\n      next.epoch != null ? [next.epoch] : []\n    )\n  ))\n  LET edges = APPEND(\n    [timeline_edge],\n    APPEND(\n      curr.epoch_edge != null ? [curr.epoch_edge] : [],\n      next.epoch_edge != null ? [next.epoch_edge] : []\n    )\n  )\n  RETURN { vertices: verts, edges: edges }",
+        "bindVariables": {},
+        "description": "Query Editor → Graph tab. Shows yearly snapshots of a module connected by virtual EVOLVED_TO edges, each linked to its epoch. Change line 1 to try: mor1kx_cpu (11yr, 6 authors), mor1kx_execute_alu (ALU core), mor1kx_dcache (cache), ibex_core (IBEX top-level).",
+        "createdAt": "2026-04-13T00:00:00.000Z",
+        "updatedAt": "2026-04-13T00:00:00.000Z"
       }
     ]
   },
@@ -322,6 +376,128 @@
         "queryText": "FOR node IN @nodes FOR v, e IN 1..2 OUTBOUND node SNAPSHOT_OF, HAS_PORT, HAS_SIGNAL, CONTAINS, HAS_PARAMETER LIMIT 200 RETURN e",
         "bindVariables": {"nodes": []},
         "createdAt": "2026-03-25T00:00:00.000Z"
+      },
+      {
+        "_key": "ic_time_travel_yearly",
+        "title": "[RTL_Module] Time travel — same module across years",
+        "name": "[RTL_Module] Time travel — same module across years",
+        "description": "From a module, find the same-named module at different years. Shows how it evolved over time. Each node is a yearly snapshot connected to its epoch.",
+        "graphId": "IC_Temporal_Knowledge_Graph",
+        "queryText": "FOR n IN @nodes\n  LET nodeId = IS_STRING(n) ? n : n._id\n  LET node = DOCUMENT(nodeId)\n  FILTER node != null AND HAS(node, \"label\")\n  FILTER STARTS_WITH(nodeId, \"RTL_Module/\")\n  FOR other IN RTL_Module\n    FILTER other.label == node.label AND other.repo == node.repo\n    FILTER other._id != node._id\n    COLLECT year = DATE_YEAR(other.valid_from_ts * 1000) INTO grp = other\n    SORT year ASC\n    LET representative = FIRST(grp)\n    LET edge = FIRST(FOR ep, e IN 1..1 OUTBOUND representative BELONGS_TO_EPOCH RETURN e)\n    FILTER edge != null\n    RETURN edge",
+        "bindVariables": {"nodes": []},
+        "createdAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "_key": "ic_contemporaries",
+        "title": "[RTL_Module] Show contemporaries — what else was alive",
+        "name": "[RTL_Module] Show contemporaries — what else was alive",
+        "description": "From a module, find all other modules alive at the same moment in time. Shows the full design context at that snapshot.",
+        "graphId": "IC_Temporal_Knowledge_Graph",
+        "queryText": "FOR n IN @nodes\n  LET nodeId = IS_STRING(n) ? n : n._id\n  LET node = DOCUMENT(nodeId)\n  FILTER node != null AND HAS(node, \"label\")\n  FILTER STARTS_WITH(nodeId, \"RTL_Module/\")\n  LET T = node.valid_from_ts\n  FOR mod IN RTL_Module\n    FILTER mod.repo == node.repo\n    FILTER mod.label != node.label\n    FILTER mod.valid_from_ts <= T AND mod.valid_to_ts > T\n    LET ep = FIRST(FOR e IN OUTBOUND mod BELONGS_TO_EPOCH SORT ABS(e.start_ts - T) ASC LIMIT 1 RETURN e)\n    FILTER ep != null\n    FOR ep2, e IN 1..1 OUTBOUND mod BELONGS_TO_EPOCH\n      FILTER ep2._id == ep._id\n      RETURN e",
+        "bindVariables": {"nodes": []},
+        "createdAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "_key": "ic_who_changed_this",
+        "title": "[RTL_Module] Who changed this? (commits + authors)",
+        "name": "[RTL_Module] Who changed this? (commits + authors)",
+        "description": "From a module, traverse back through MODIFIED to find the commits, then to the authors who made them.",
+        "graphId": "IC_Temporal_Knowledge_Graph",
+        "queryText": "LET edges = (\n  FOR n IN @nodes\n    LET nodeId = IS_STRING(n) ? n : n._id\n    LET node = DOCUMENT(nodeId)\n    FILTER node != null\n    FILTER STARTS_WITH(nodeId, \"RTL_Module/\")\n    FOR commit, e1 IN 1..1 INBOUND node MODIFIED\n      LET author_edges = (FOR author, e2 IN 1..1 INBOUND commit AUTHORED RETURN e2)\n      RETURN { mod: e1, auth: author_edges }\n)\nFOR item IN edges\n  FOR e IN APPEND([item.mod], item.auth)\n    RETURN e",
+        "bindVariables": {"nodes": []},
+        "createdAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "_key": "ic_sibling_changes",
+        "title": "[RTL_Module] What else changed in the same commit",
+        "name": "[RTL_Module] What else changed in the same commit",
+        "description": "From a module, find the commits that modified it, then see what other modules were changed in those same commits.",
+        "graphId": "IC_Temporal_Knowledge_Graph",
+        "queryText": "FOR n IN @nodes\n  LET nodeId = IS_STRING(n) ? n : n._id\n  LET node = DOCUMENT(nodeId)\n  FILTER node != null\n  FILTER STARTS_WITH(nodeId, \"RTL_Module/\")\n  FOR commit IN 1..1 INBOUND node MODIFIED\n    FOR sibling, e IN 1..1 OUTBOUND commit MODIFIED\n      FILTER sibling._id != node._id\n      LIMIT 50\n      RETURN e",
+        "bindVariables": {"nodes": []},
+        "createdAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "_key": "ic_author_expertise_map",
+        "title": "[Author] Show all maintained modules",
+        "name": "[Author] Show all maintained modules",
+        "description": "From an Author node, show all modules they maintain (3+ commits, 10%+ contribution).",
+        "graphId": "IC_Temporal_Knowledge_Graph",
+        "queryText": "FOR n IN @nodes\n  LET nodeId = IS_STRING(n) ? n : n._id\n  LET node = DOCUMENT(nodeId)\n  FILTER node != null\n  FILTER STARTS_WITH(nodeId, \"Author/\")\n  FOR mod, e IN 1..1 OUTBOUND node MAINTAINS\n    RETURN e",
+        "bindVariables": {"nodes": []},
+        "createdAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "_key": "ic_epoch_timeline",
+        "title": "[DesignEpoch] Show epoch timeline (±5 neighbors)",
+        "name": "[DesignEpoch] Show epoch timeline (±5 neighbors)",
+        "description": "From an epoch, show the 5 preceding and 5 following epochs in the same repo. Creates a visual timeline.",
+        "graphId": "IC_Temporal_Knowledge_Graph",
+        "queryText": "FOR n IN @nodes\n  LET nodeId = IS_STRING(n) ? n : n._id\n  LET node = DOCUMENT(nodeId)\n  FILTER node != null\n  FILTER STARTS_WITH(nodeId, \"DesignEpoch/\")\n  LET before = (\n    FOR prev, e IN 1..5 INBOUND node PRECEDES_EPOCH\n      RETURN e\n  )\n  LET after = (\n    FOR next, e IN 1..5 OUTBOUND node PRECEDES_EPOCH\n      RETURN e\n  )\n  FOR e IN APPEND(before, after)\n    RETURN e",
+        "bindVariables": {"nodes": []},
+        "createdAt": "2026-04-13T00:00:00.000Z"
+      },
+      {
+        "_key": "ic_epoch_milestones",
+        "title": "[DesignEpoch] Jump to milestone releases",
+        "name": "[DesignEpoch] Jump to milestone releases",
+        "description": "From any epoch, show all milestone/release epochs in the same repo as a connected timeline.",
+        "graphId": "IC_Temporal_Knowledge_Graph",
+        "queryText": "FOR n IN @nodes\n  LET nodeId = IS_STRING(n) ? n : n._id\n  LET node = DOCUMENT(nodeId)\n  FILTER node != null\n  FILTER STARTS_WITH(nodeId, \"DesignEpoch/\")\n  FOR m IN DesignEpoch\n    FILTER m.repo == node.repo\n    FILTER m.epoch_type IN [\"milestone_tag\", \"initial_commit\"]\n    SORT m.start_ts ASC\n    FOR v, e IN 1..1 OUTBOUND m PRECEDES_EPOCH\n      FILTER e.edge_type == \"milestone_shortcut\"\n      RETURN e",
+        "bindVariables": {"nodes": []},
+        "createdAt": "2026-04-13T00:00:00.000Z"
+      }
+    ]
+  },
+  {
+    "visualizer_queries": [
+      {
+        "name": "[Timeline] MOR1KX Release History (2012→2024)",
+        "description": "Milestone timeline: birth → v1.0 → v5.0 → v5.0-r1 → v5.0-r2 → v5.1 → v5.1.1 → v5.2. Shows time gaps between releases.",
+        "queryText": "FOR m IN DesignEpoch\n  FILTER m.repo == \"openrisc/mor1kx.git\"\n  FILTER m.epoch_type IN [\"milestone_tag\", \"initial_commit\"]\n  SORT m.start_ts ASC\n  FOR v, e, p IN 1..1 OUTBOUND m PRECEDES_EPOCH\n    FILTER e.edge_type == \"milestone_shortcut\"\n    RETURN p",
+        "bindVariables": {}
+      },
+      {
+        "name": "[Timeline] IBEX Release History (2015→2024)",
+        "description": "Milestone timeline for IBEX. Shows the major releases and time gaps between them.",
+        "queryText": "FOR m IN DesignEpoch\n  FILTER m.repo == \"lowRISC/ibex.git\"\n  FILTER m.epoch_type IN [\"milestone_tag\", \"initial_commit\"]\n  SORT m.start_ts ASC\n  FOR v, e, p IN 1..1 OUTBOUND m PRECEDES_EPOCH\n    FILTER e.edge_type == \"milestone_shortcut\"\n    RETURN p",
+        "bindVariables": {}
+      },
+      {
+        "name": "[TT-1] MOR1KX Birth (2012) — 19 modules",
+        "description": "Time travel: MOR1KX at its first commit. 19 original fourstage pipeline modules. Click modules → use canvas actions to explore.",
+        "queryText": "FOR mod, edge, path IN 1..1 INBOUND 'DesignEpoch/77f096fb68c3eb90' BELONGS_TO_EPOCH\n  RETURN path",
+        "bindVariables": {}
+      },
+      {
+        "name": "[TT-2] MOR1KX v5.1 (2022) — 29 modules",
+        "description": "Time travel: MOR1KX at v5.1 release, 10 years later. Compare with TT-1 to see what survived, what was added, what died.",
+        "queryText": "FOR mod, edge, path IN 1..1 INBOUND 'DesignEpoch/70f4715e0bdddbca' BELONGS_TO_EPOCH\n  RETURN path",
+        "bindVariables": {}
+      },
+      {
+        "name": "[TT-3] IBEX at birth (2015) — 13 PULP-era modules",
+        "description": "Time travel: IBEX when it was born as a PULP project. Generic names like if_stage, alu, controller. Compare with TT-4.",
+        "queryText": "FOR mod, edge, path IN 1..1 INBOUND 'DesignEpoch/111574301cfea4a1' BELONGS_TO_EPOCH\n  RETURN path",
+        "bindVariables": {}
+      },
+      {
+        "name": "[TT-4] IBEX rebranded (2019) — 20 ibex_* modules",
+        "description": "Time travel: IBEX after rebranding from zeroriscy. All modules now prefixed ibex_*. Compare with TT-3 to see the naming evolution.",
+        "queryText": "LET T = 1559347200\nFOR mod IN RTL_Module\n  FILTER mod.repo == 'lowRISC/ibex.git'\n  FILTER mod.valid_from_ts <= T AND mod.valid_to_ts > T\n  LET epoch = FIRST(FOR ep IN OUTBOUND mod BELONGS_TO_EPOCH SORT ABS(ep.start_ts - T) ASC LIMIT 1 RETURN ep)\n  FILTER epoch != null\n  FOR ep2, e, p IN 1..1 OUTBOUND mod BELONGS_TO_EPOCH\n    FILTER ep2._id == epoch._id\n    RETURN p",
+        "bindVariables": {}
+      },
+      {
+        "name": "[TT-5] Commit blast — Wishbone refactor (13 modules)",
+        "description": "A single commit that touched 13 modules at once. Shows the blast radius of a Wishbone interface refactor.",
+        "queryText": "FOR v, e, p IN 1..1 OUTBOUND 'GitCommit/f7f7931b3134e0740237242ff874dfb6820f52b4' MODIFIED\n  RETURN p",
+        "bindVariables": {}
+      },
+      {
+        "name": "[TT-6] Cross-repo bridge — Instruction Fetch",
+        "description": "OR1200 Instruction Fetch Subunit → cross-repo bridges to IBEX, MOR1KX. Shows how a 2001 spec concept survives across 4 repos.",
+        "queryText": "FOR v, e, p IN 2..3\n  ANY 'OR1200_Golden_Entities/OR1200_g_2eeeeaacece8'\n  GRAPH 'IC_Temporal_Knowledge_Graph'\n  OPTIONS { uniqueVertices: 'path' }\n  LET edge_cols = (FOR edge IN p.edges RETURN PARSE_IDENTIFIER(edge._id).collection)\n  FILTER 'CROSS_REPO_SIMILAR_TO' IN edge_cols\n  LIMIT 25\n  RETURN p",
+        "bindVariables": {}
       }
     ]
   }

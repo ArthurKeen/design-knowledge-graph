@@ -4,19 +4,24 @@
 #
 # Full database rebuild from scratch. Runs the complete pipeline:
 #
-#   Phase 1: Data Ingestion
-#     1. Multi-repo temporal ETL + deep RTL + GraphRAG  (ingest_repo.py)
+#   Phase 0: Database Setup
+#     0. Create database if it doesn't exist              (create_oneshard_database.py)
 #
-#   Phase 2: Graph & Inference
-#     2. Create named graph definition                   (create_temporal_graph.py)
-#     3. Situation detection                             (situation_detector.py)
-#     4. RESOLVED_TO semantic bridges                    (rtl_semantic_bridge.py)
-#     5. Cross-repo bridges                              (cross_repo_bridge.py)
-#     6. SNAPSHOT_OF edges (temporal → HEAD)              (create_snapshot_of_edges.py)
+#   Phase 1: Data Ingestion
+#     1. Multi-repo temporal ETL + deep RTL + GraphRAG    (ingest_repo.py)
+#
+#   Phase 2: Inference & Graph Definition
+#     2. Author expertise mapping                         (etl_authors.py)
+#     3. Situation detection                              (situation_detector.py)
+#     4. RESOLVED_TO semantic bridges                     (rtl_semantic_bridge.py)
+#     5. Cross-repo bridges                               (cross_repo_bridge.py)
+#     6. SNAPSHOT_OF edges (temporal → HEAD)               (create_snapshot_of_edges.py)
+#     7. Named graph definition (last — introspects all)  (create_temporal_graph.py)
 #
 #   Phase 3: Visualizer Setup
-#     7. Theme installation                              (install_ic_theme.py)
-#     8. Saved queries + canvas actions                   (install_demo_setup.py)
+#     8a. Bootstrap Visualizer collections                 (bootstrap_visualizer_collections.py)
+#     8b. Theme installation                               (install_ic_theme.py)
+#     9.  Saved queries + canvas actions                    (install_demo_setup.py)
 #
 # Usage:
 #   ./scripts/rebuild_database.sh                    # full rebuild
@@ -75,6 +80,16 @@ step_ok() { echo "[REBUILD] ✓ $1"; }
 step_fail() { echo "[REBUILD] ✗ $1 (non-fatal, continuing)"; FAILED=$((FAILED+1)); }
 
 # ===================================================================
+# Phase 0: Ensure database exists
+# ===================================================================
+echo "[REBUILD] Ensuring database exists..."
+if PYTHONPATH="${SRC_DIR}" ${PYTHON} "${SCRIPT_DIR}/setup/create_oneshard_database.py"; then
+    step_ok "Database exists (or created)"
+else
+    step_fail "Database creation"
+fi
+
+# ===================================================================
 # Phase 1: Data Ingestion
 # ===================================================================
 if [[ "${SKIP_INGESTION}" == "false" ]]; then
@@ -99,15 +114,15 @@ fi
 # ===================================================================
 echo ""
 echo "============================================"
-echo " Phase 2: Graph Definition & Inference"
+echo " Phase 2: Inference & Graph Definition"
 echo "============================================"
 
-# Step 2: Named graph definition
-echo "[REBUILD] Creating named graph definition..."
-if PYTHONPATH="${SRC_DIR}" ${PYTHON} "${SCRIPT_DIR}/temporal/create_temporal_graph.py"; then
-    step_ok "Named graph (IC_Temporal_Knowledge_Graph)"
+# Step 2: Author expertise mapping (before graph def so Author/AUTHORED/MAINTAINS exist)
+echo "[REBUILD] Extracting author expertise..."
+if PYTHONPATH="${SRC_DIR}" ${PYTHON} "${SRC_DIR}/etl_authors.py"; then
+    step_ok "Author vertices + AUTHORED/MAINTAINS edges"
 else
-    step_fail "Named graph creation"
+    step_fail "Author expertise mapping"
 fi
 
 # Step 3: Design situations
@@ -142,6 +157,14 @@ else
     step_fail "SNAPSHOT_OF edges"
 fi
 
+# Step 7: Named graph definition (last — so it introspects ALL collections)
+echo "[REBUILD] Creating named graph definition..."
+if PYTHONPATH="${SRC_DIR}" ${PYTHON} "${SCRIPT_DIR}/temporal/create_temporal_graph.py"; then
+    step_ok "Named graph (IC_Temporal_Knowledge_Graph)"
+else
+    step_fail "Named graph creation"
+fi
+
 # ===================================================================
 # Phase 3: Visualizer Setup
 # ===================================================================
@@ -151,12 +174,27 @@ if [[ "${SKIP_VISUALIZER}" == "false" ]]; then
     echo " Phase 3: Visualizer Setup"
     echo "============================================"
     echo ""
-    echo "[REBUILD] NOTE: Visualizer setup requires that you have opened the graph"
-    echo "         at least once in the ArangoDB Web UI. If _graphThemeStore or"
-    echo "         _canvasActions don't exist, these steps will warn but continue."
-    echo ""
 
-    # Step 7: IC theme
+    # Step 8a: Bootstrap Visualizer system collections (idempotent).
+    # Eliminates the need to open the graph in the Web UI before installing
+    # themes / canvas actions on a freshly-created database.
+    echo "[REBUILD] Bootstrapping Visualizer system collections..."
+    if PYTHONPATH="${SRC_DIR}" ${PYTHON} "${SCRIPT_DIR}/setup/bootstrap_visualizer_collections.py"; then
+        step_ok "Visualizer system collections + Default viewpoint"
+    else
+        step_fail "Bootstrap visualizer collections"
+    fi
+
+    # Step 8b: Epoch timeline edges used by timeline queries/actions.
+    echo "[REBUILD] Creating PRECEDES_EPOCH timeline edges..."
+    if PYTHONPATH="${SRC_DIR}" ${PYTHON} "${SCRIPT_DIR}/setup/create_precedes_epoch_edges.py" \
+        --graph IC_Temporal_Knowledge_Graph; then
+        step_ok "PRECEDES_EPOCH timeline edges"
+    else
+        step_fail "PRECEDES_EPOCH timeline edges"
+    fi
+
+    # Step 8c: IC theme + canvas actions
     echo "[REBUILD] Installing Integrated Circuit theme..."
     if PYTHONPATH="${SRC_DIR}" ${PYTHON} "${SCRIPT_DIR}/setup/install_ic_theme.py"; then
         step_ok "Integrated Circuit theme"
@@ -164,7 +202,7 @@ if [[ "${SKIP_VISUALIZER}" == "false" ]]; then
         step_fail "Theme installation (open graph in UI first, then re-run)"
     fi
 
-    # Step 8: Saved queries + canvas actions
+    # Step 9: Saved queries + canvas actions
     echo "[REBUILD] Installing demo saved queries and canvas actions..."
     if PYTHONPATH="${SRC_DIR}" ${PYTHON} "${SCRIPT_DIR}/setup/install_demo_setup.py" \
         --graph IC_Temporal_Knowledge_Graph; then

@@ -57,6 +57,7 @@ def _normalize_assets(data: list, database_name: str, graph_name: str) -> list:
         q["databaseName"] = database_name
         if "content" in q:
             q["content"] = _rewrite_graph_refs(q["content"], graph_name)
+            q["value"] = q["content"]
 
     for a in data[1].get("actions", []):
         if "queryText" in a:
@@ -89,12 +90,17 @@ def install_saved_queries(db, queries_data):
     installed = 0
 
     for query in queries_data[0]["queries"]:
+        if "content" in query:
+            query["value"] = query["content"]
+
         existing = list(query_col.find({"title": query["title"]}))
 
         if existing:
             doc_key = existing[0]["_key"]
+            query["_key"] = doc_key
+            query["createdAt"] = existing[0].get("createdAt", query.get("createdAt"))
             query["updatedAt"] = datetime.utcnow().isoformat() + "Z"
-            query_col.update({"_key": doc_key}, query)
+            query_col.replace(query, check_rev=False)
             print(f"  Updated: {query['title']}")
         else:
             query_col.insert(query)
@@ -109,8 +115,10 @@ def install_saved_queries(db, queries_data):
 def install_canvas_actions(db, actions_data):
     """Install canvas actions into _canvasActions collection.
 
-    The ArangoDB Graph Visualizer requires canvas actions to use `queryText`
-    (not `query`) and the bind variable `@nodes` (array, not `@startNode`).
+    The ArangoDB Graph Visualizer requires canvas actions to use ``queryText``
+    (not ``query``) and the bind variable ``@nodes`` (array).  We use
+    ``replace`` (not merge-update) so that any stale fields left by previous
+    install runs are cleaned out.
     """
     print("\n[2/3] Installing Canvas Actions...")
 
@@ -127,8 +135,9 @@ def install_canvas_actions(db, actions_data):
 
         if 'title' in action and 'name' not in action:
             action['name'] = action['title']
+        if 'name' in action and 'title' not in action:
+            action['title'] = action['name']
 
-        # Migrate legacy `query` field → `queryText` for Visualizer compat
         if 'query' in action and 'queryText' not in action:
             action['queryText'] = action.pop('query')
         elif 'query' in action:
@@ -137,12 +146,15 @@ def install_canvas_actions(db, actions_data):
         if 'bindVariables' not in action:
             action['bindVariables'] = {"nodes": []}
 
+        action['updatedAt'] = datetime.utcnow().isoformat() + "Z"
+
         if action_col.has(key):
-            action_col.update({"_key": key}, action)
-            print(f"  Updated: {action.get('title', action.get('name', key))}")
+            action['_key'] = key
+            action_col.replace(action)
+            print(f"  Replaced: {action.get('name', key)}")
         else:
             action_col.insert(action)
-            print(f"  Installed: {action.get('title', action.get('name', key))}")
+            print(f"  Installed: {action.get('name', key)}")
 
         installed += 1
 
@@ -212,6 +224,85 @@ def link_actions_to_graph(db, actions_data, graph_name: str):
     
     print(f"\n  Total actions linked: {linked}")
     return linked
+
+
+def install_visualizer_queries(db, data, graph_name: str):
+    """Install queries into the Graph Visualizer's own query system.
+
+    The Graph Visualizer uses ``_queries`` (linked to a viewpoint via
+    ``_viewpointQueries``), which is separate from the standalone Query
+    Editor's ``_editor_saved_queries``.
+    """
+    vis_section = next((s for s in data if "visualizer_queries" in s), None)
+    if not vis_section:
+        return 0
+
+    print("\n[4/4] Installing Visualizer Queries...")
+
+    if not db.has_collection("_queries"):
+        print("  [PREREQ] _queries collection not found.")
+        print("  Open the Graph Visualizer once, then rerun this script.")
+        return 0
+
+    if not db.has_collection("_viewpoints"):
+        print("  [PREREQ] _viewpoints collection not found.")
+        return 0
+
+    viewpoints = list(db.collection("_viewpoints").all())
+    viewpoint = next(
+        (vp for vp in viewpoints if vp.get("graphId") == graph_name),
+        viewpoints[0] if viewpoints else None,
+    )
+    if viewpoint is None:
+        print("  ERROR: No viewpoints found.")
+        return 0
+
+    viewpoint_id = viewpoint["_id"]
+    print(f"  Using viewpoint: {viewpoint_id}")
+
+    queries_col = db.collection("_queries")
+    if not db.has_collection("_viewpointQueries"):
+        db.create_collection("_viewpointQueries", edge=True)
+    vq_col = db.collection("_viewpointQueries")
+
+    installed = 0
+    for q in vis_section["visualizer_queries"]:
+        q["graphId"] = graph_name
+        q.setdefault("bindVariables", {})
+        if "queryText" in q:
+            q["queryText"] = _rewrite_graph_refs(q["queryText"], graph_name)
+
+        existing = list(queries_col.find({"name": q["name"]}))
+        if existing:
+            q["_key"] = existing[0]["_key"]
+            q["createdAt"] = existing[0].get("createdAt", q.get("createdAt"))
+            q["updatedAt"] = datetime.utcnow().isoformat() + "Z"
+            queries_col.replace(q, check_rev=False)
+            query_id = existing[0]["_id"]
+            if not list(vq_col.find({"_from": viewpoint_id, "_to": query_id})):
+                vq_col.insert({
+                    "_from": viewpoint_id,
+                    "_to": query_id,
+                    "createdAt": q["updatedAt"],
+                    "updatedAt": q["updatedAt"],
+                })
+            print(f"  Replaced: {q['name']}")
+        else:
+            q["createdAt"] = datetime.utcnow().isoformat() + "Z"
+            q["updatedAt"] = q["createdAt"]
+            result = queries_col.insert(q)
+            query_id = result["_id"]
+            vq_col.insert({
+                "_from": viewpoint_id,
+                "_to": query_id,
+                "createdAt": q["createdAt"],
+                "updatedAt": q["updatedAt"],
+            })
+            print(f"  Installed + linked: {q['name']}")
+        installed += 1
+
+    print(f"\n  Total visualizer queries processed: {installed}")
+    return installed
 
 
 # Theme installation removed - use install_theme.py instead
@@ -332,6 +423,7 @@ def main():
         install_saved_queries(db, data)
         install_canvas_actions(db, data)
         link_actions_to_graph(db, data, graph_name=args.graph)
+        install_visualizer_queries(db, data, graph_name=args.graph)
         
         # Verify installation
         success = verify_installation(db)
