@@ -32,3 +32,16 @@ data/repos/
 *.egg-info/
 dist/
 build/
+
+# Local virtualenv (rebuilt on-demand — see README for setup)
+.venv/
+
+# Local pre-refresh safety dumps (see docs/DATA_REFRESH_PLAN.md)
+backups/
+.prd-drift-queue/
+.claude/
+CLAUDE.md
+.no-drift-gate
+.cursor/.shared-memory-sessions/
+.cursor/hooks.json.pre-update.*
+.cursor/hooks/*.pre-update.*
