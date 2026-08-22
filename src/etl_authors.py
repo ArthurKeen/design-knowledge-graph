@@ -288,63 +288,68 @@ def create_maintains_edges(db):
     print("  Clearing existing MAINTAINS edges...")
     maintains_col.truncate()
     
-    # Query to find author-module relationships
+    # Pass 1: total commits per logical module (label+repo), computed once
+    print("  Pass 1: counting total commits per logical module...")
+    module_totals_q = """
+    FOR e IN MODIFIED
+      LET mod = DOCUMENT(e._to)
+      COLLECT label = mod.label, repo = mod.repo WITH COUNT INTO cnt
+      RETURN { label, repo, cnt }
+    """
+    module_totals = {(r["label"], r["repo"]): r["cnt"]
+                     for r in db.aql.execute(module_totals_q)}
+    print(f"    {len(module_totals)} logical modules with commits")
+
+    # Pass 2: per-author per-logical-module commit counts
+    # Temporal RTL_Module snapshots are unique per commit, so we group by
+    # label + repo to get the logical module identity.
     query = """
     WITH Author, GitCommit, RTL_Module
     FOR author IN Author
-      // Find all modules this author has committed to
-      LET module_commits = (
-        FOR commit IN 1..1 OUTBOUND author AUTHORED
-          FOR module IN 1..1 OUTBOUND commit MODIFIED
-            RETURN {
-              module: module,
-              commit: commit
-            }
-      )
-      
-      // Group by module and collect stats
-      FOR mc IN module_commits
-        COLLECT module = mc.module, author_id = author._id INTO commits = mc.commit
-        
-        LET commit_count = LENGTH(commits)
-        LET timestamps = (
-          FOR c IN commits
-            SORT c.timestamp
-            RETURN c.timestamp
-        )
-        
-        LET first_commit = timestamps[0]
-        LET last_commit = timestamps[-1]
-        
-        // Get total commits to this module for percentage calculation
-        LET total_module_commits = LENGTH(
-          FOR c IN GitCommit
-            FOR m IN 1..1 OUTBOUND c MODIFIED
-              FILTER m._id == module._id
-              RETURN 1
-        )
-        
-        // Calculate if this author "maintains" the module
-        LET commit_percentage = commit_count / total_module_commits
-        LET qualifies = (
-          commit_count >= 3 OR 
-          commit_percentage >= 0.2
-        )
-        
-        FILTER qualifies
-        
-        RETURN {
-          author_id: author_id,
-          module_id: module._id,
-          commit_count: commit_count,
-          first_commit: first_commit,
-          last_commit: last_commit,
-          total_module_commits: total_module_commits
-        }
+      FOR commit IN 1..1 OUTBOUND author AUTHORED
+        FOR module IN 1..1 OUTBOUND commit MODIFIED
+          COLLECT author_id = author._id,
+                  mod_label = module.label,
+                  mod_repo  = module.repo
+          INTO commits = commit
+          LET commit_count = LENGTH(commits)
+          LET timestamps = commits[*].timestamp
+          RETURN {
+            author_id,
+            mod_label,
+            mod_repo,
+            commit_count,
+            first_commit: MIN(timestamps),
+            last_commit:  MAX(timestamps)
+          }
     """
-    
-    print("  Calculating MAINTAINS relationships...")
-    results = list(db.aql.execute(query))
+
+    print("  Pass 2: computing author-module relationships...")
+    results_raw = list(db.aql.execute(query))
+
+    # Build a lookup: (label, repo) → most-recent RTL_Module _id
+    print("  Resolving logical modules to latest snapshots...")
+    latest_q = """
+    FOR m IN RTL_Module
+      SORT m.valid_from_ts DESC
+      COLLECT label = m.label, repo = m.repo INTO snapshots = m._id
+      RETURN { label, repo, latest_id: snapshots[0] }
+    """
+    latest_module = {(r["label"], r["repo"]): r["latest_id"]
+                     for r in db.aql.execute(latest_q)}
+
+    # Apply threshold filter and merge with module totals
+    results = []
+    for r in results_raw:
+        total = module_totals.get((r["mod_label"], r["mod_repo"]), r["commit_count"])
+        pct = r["commit_count"] / total if total else 0
+        if r["commit_count"] >= 3 or pct >= 0.2:
+            mod_id = latest_module.get((r["mod_label"], r["mod_repo"]))
+            if not mod_id:
+                continue
+            r["module_id"] = mod_id
+            r["total_module_commits"] = total
+            results.append(r)
     
     print(f"  Found {len(results)} maintenance relationships")
     

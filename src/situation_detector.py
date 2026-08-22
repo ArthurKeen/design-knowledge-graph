@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import COL_COMMIT, COL_MODULE
 from config_temporal import (
     ARANGO_DATABASE, COL_DESIGN_SITUATION,
-    REPO_REGISTRY, EDGE_EXEMPLIFIES,
+    REPO_REGISTRY,
 )
 from db_utils import get_temporal_db
 from utils import get_edge_key

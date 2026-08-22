@@ -7,7 +7,7 @@ repos:
     doc_path: doc
     prefix: OR1200_
     priority: 1
-    local_path: /Users/arthurkeen/code/ic-knowledge-graph/or1200
+    local_path: or1200  # relative to project root (git submodule)
 
   - name: mor1kx
     github_url: https://github.com/openrisc/mor1kx.git

@@ -2,7 +2,7 @@
 ## "Déjà Vu of Design: 30 Years of Open-Source Processor Evolution"
 
 **Database:** `ic-knowledge-graph-temporal`  
-**ArangoDB UI:** https://5ieeavs2.rnd.pilot.arango.ai  
+**ArangoDB UI:** https://qmlz4af1.rnd.pilot.arango.ai  
 **Estimated runtime:** 20–30 minutes  
 **Audience:** Technical stakeholders, hardware engineers, EDA researchers
 
@@ -24,11 +24,15 @@
 |---|---|
 | Repositories ingested | 4 (OR1200, mor1kx, marocchino, ibex) |
 | Total commits | 3,796 |
-| RTL modules (across all history) | 6,594 |
-| Named design epochs | 390 |
-| Design situations | 723 |
-| GraphRAG entities | 317 |
-| Cross-repo bridges | 34 |
+| RTL modules (across all history) | 6,404 |
+| Named design epochs | 381 |
+| Design situations | 721 |
+| Authors | 137 |
+| Author→Module MAINTAINS edges | 615 |
+| Semantic bridges (RESOLVED_TO) | 214 |
+| Cross-repo structural bridges | 72 |
+| Cross-repo evolutionary bridges | 1 |
+| Golden Entities (OR1200 / MOR1KX / IBEX / MAROCCHINO) | 170 / 39 / 546 / 120 |
 
 ---
 
@@ -46,15 +50,18 @@ LET repos = (
 )
 LET epochs = (FOR e IN DesignEpoch COLLECT r = e.repo WITH COUNT INTO n RETURN {repo: r, epochs: n})
 RETURN {
-  total_commits:  SUM(repos[*].commits),
-  total_modules:  LENGTH(RTL_Module),
-  total_epochs:   LENGTH(DesignEpoch),
+  total_commits:    SUM(repos[*].commits),
+  total_modules:    LENGTH(RTL_Module),
+  total_epochs:     LENGTH(DesignEpoch),
   total_situations: LENGTH(DesignSituation),
+  total_authors:    LENGTH(Author),
+  semantic_bridges: LENGTH(RESOLVED_TO),
+  cross_repo_links: LENGTH(CROSS_REPO_SIMILAR_TO),
   by_repo: repos
 }
 ```
 
-**Expected output:** 3,796 commits, 6,404 modules, 381 epochs, 721 situations.
+**Expected output:** 3,796 commits, 6,404 modules, 381 epochs, 721 situations, 137 authors, 214 semantic bridges, 72 cross-repo links.
 
 ### Fix — Backfill git_tag on existing DesignEpoch nodes
 *Run this once in the UI to fix the null git_tags. The ETL code has been fixed so future ingest runs will populate git_tag correctly.*
@@ -326,11 +333,61 @@ FOR e IN OR1200_Golden_Entities
 
 ---
 
-## Scene 5 — "The Déjà Vu Query — It's Happened Before" (~5 min)
+## Scene 5 — "Who Knows What?" — Author Expertise Mapping (~3 min)
+
+**Talking point:** *Real hardware knowledge lives in people, not just files. By linking git authors through their commits to the modules they modify, we can answer: "Who is the expert on this subsystem?" and "Which engineers span multiple repos?"*
+
+### Query 5a — Top maintainers by module ownership
+
+```aql
+// Who maintains the most modules across all repos?
+FOR a IN Author
+  LET maintained = (
+    FOR m IN 1..1 OUTBOUND a MAINTAINS
+      RETURN DISTINCT m.label
+  )
+  LET commit_repos = (
+    FOR c IN 1..1 OUTBOUND a AUTHORED
+      RETURN DISTINCT c.repo
+  )
+  FILTER LENGTH(maintained) > 0
+  SORT LENGTH(maintained) DESC
+  LIMIT 15
+  RETURN {
+    author: a.name,
+    modules_maintained: LENGTH(maintained),
+    repos: commit_repos,
+    sample_modules: maintained[0..4]
+  }
+```
+
+**Point out:** Stafford Horne maintains 64 modules, Pasquale Davide Schiavone maintains 63 — they are the top two experts across the entire 30-year lineage. Note how some authors span multiple repos.
+
+### Query 5b — Author expertise as a graph
+
+> Switch to the **Graph** tab after running this to see the maintainer's footprint.
+
+```aql
+// Visualise a top maintainer's module ownership
+LET top_author = FIRST(
+  FOR a IN Author
+    LET cnt = LENGTH(FOR m IN 1..1 OUTBOUND a MAINTAINS RETURN 1)
+    SORT cnt DESC LIMIT 1 RETURN a
+)
+FOR v, e, p IN 1..2 OUTBOUND top_author MAINTAINS, BELONGS_TO_EPOCH
+  LIMIT 100
+  RETURN p
+```
+
+**Point out:** The star pattern shows one expert's footprint: Author → Module → Epoch. You can see how their work spans milestones and time periods.
+
+---
+
+## Scene 6 — "The Déjà Vu Query — It's Happened Before" (~5 min)
 
 **Talking point:** *Now for the showpiece: a current engineer is adding a fetch stage to their pipeline. The system instantly recognizes this situation has occurred before — in three different projects — and surfaces what happened next.*
 
-### Query 5a — Find all situations where a fetch-related module was introduced
+### Query 6a — Find all situations where a fetch-related module was introduced
 ```aql
 // Has anyone added a fetch module before? When and in which project?
 FOR s IN DesignSituation
@@ -350,7 +407,7 @@ FOR s IN DesignSituation
   }
 ```
 
-### Query 5b — The full Déjà Vu traversal: commit → module → epoch → situation → docs
+### Query 6b — The full Déjà Vu traversal: commit → module → epoch → situation → docs
 ```aql
 // Full chain: a specific module → its epoch → situation → related doc entities
 LET target_module = FIRST(
@@ -396,7 +453,99 @@ RETURN {
 
 ---
 
-## Scene 6 — "Graph Visualization" (~4 min)
+## Scene 7 — "Time Travel in the Visualizer" (~5 min)
+
+**Talking point:** *Everything so far has been tabular results. Now let's time-travel visually. We'll compare the same codebase at two moments in history — and you'll see the architecture literally grow on screen.*
+
+### Query TT-1 — MOR1KX Birth vs v5.1 (graph view)
+
+> Run this in the **Standalone Query Editor**, then switch to the **Graph** tab.
+
+```aql
+// Compare MOR1KX at birth (2012, 19 modules) vs v5.1 (2022, 48 modules)
+LET T_birth = 1327622400   // 2012-01-26
+LET T_v51   = 1641600000   // 2022-01-09
+
+FOR T IN [T_birth, T_v51]
+  FOR mod IN RTL_Module
+    FILTER mod.repo == 'openrisc/mor1kx.git'
+    FILTER mod.valid_from_ts <= T AND mod.valid_to_ts > T
+    LET best_epoch = FIRST(
+      FOR ep IN OUTBOUND mod BELONGS_TO_EPOCH
+        SORT ABS(ep.start_ts - T) ASC LIMIT 1 RETURN ep
+    )
+    FILTER best_epoch != null
+    FOR ep2, e, p IN 1..1 OUTBOUND mod BELONGS_TO_EPOCH
+      FILTER ep2._id == best_epoch._id
+      RETURN p
+```
+
+**What you'll see:** Two clusters of epoch nodes. The birth cluster (left) has 19 modules — the original `fourstage` pipeline. The v5.1 cluster (right) has 48 modules — three pipeline variants (`cappuccino`, `espresso`, `prontoespresso`). Modules that survived both eras appear in both clusters with different snapshots.
+
+**Point out:** 10 original `fourstage` modules were killed off by 2012 — replaced by the `cappuccino` pipeline. 39 new modules were added over the next decade. Only 9 of the original 19 modules survived all 10 years.
+
+### Query TT-2 — IBEX Naming Eras: PULP → zeroriscy → ibex (graph view)
+
+```aql
+// IBEX was renamed TWICE — watch the entire codebase change identity
+LET T_pulp = 1451606400   // 2016-01 — "PULP" era (generic names: if_stage, alu)
+LET T_zero = 1514764800   // 2018-01 — "zeroriscy" era (all renamed: zeroriscy_*)
+LET T_ibex = 1559347200   // 2019-06 — "ibex" era (renamed again: ibex_*)
+
+FOR T IN [T_pulp, T_zero, T_ibex]
+  FOR mod IN RTL_Module
+    FILTER mod.repo == 'lowRISC/ibex.git'
+    FILTER mod.valid_from_ts <= T AND mod.valid_to_ts > T
+    LET best_epoch = FIRST(
+      FOR ep IN OUTBOUND mod BELONGS_TO_EPOCH
+        SORT ABS(ep.start_ts - T) ASC LIMIT 1 RETURN ep
+    )
+    FILTER best_epoch != null
+    FOR ep2, e, p IN 1..1 OUTBOUND mod BELONGS_TO_EPOCH
+      FILTER ep2._id == best_epoch._id
+      RETURN p
+```
+
+**What you'll see:** Three distinct clusters. The PULP cluster has generic module names (`if_stage`, `alu`, `controller`). The zeroriscy cluster shows the same architecture with `zeroriscy_` prefixed names. The ibex cluster shows the final `ibex_` names. The temporal graph captured both rebrandings — something no snapshot-based system could show.
+
+### Query TT-3 — Module Births & Deaths (graph view)
+
+```aql
+// Show modules that were REMOVED or newly BORN between two dates
+// Each module is linked to its introduction epoch — visible in graph tab
+LET T1 = 1327622400    // 2012-01 (MOR1KX birth)
+LET T2 = 1641600000    // 2022-01 (MOR1KX v5.1)
+
+LET at_T1 = (FOR m IN RTL_Module
+  FILTER m.repo == 'openrisc/mor1kx.git' AND m.valid_from_ts <= T1 AND m.valid_to_ts > T1
+  RETURN DISTINCT m.label)
+
+LET at_T2 = (FOR m IN RTL_Module
+  FILTER m.repo == 'openrisc/mor1kx.git' AND m.valid_from_ts <= T2 AND m.valid_to_ts > T2
+  RETURN DISTINCT m.label)
+
+LET removed = MINUS(at_T1, at_T2)
+LET born = MINUS(at_T2, at_T1)
+
+FOR label IN UNION(removed, SLICE(born, 0, 10))
+  LET snap = FIRST(
+    FOR m IN RTL_Module
+      FILTER m.label == label AND m.repo == 'openrisc/mor1kx.git'
+      SORT m.valid_from_ts ASC LIMIT 1 RETURN m
+  )
+  FILTER snap != null
+  LET epoch = FIRST(FOR e IN OUTBOUND snap BELONGS_TO_EPOCH LIMIT 1 RETURN e)
+  FILTER epoch != null
+  FOR ep2, e, p IN 1..1 OUTBOUND snap BELONGS_TO_EPOCH
+    FILTER ep2._id == epoch._id
+    RETURN p
+```
+
+**Point out:** In the graph view you'll see 20 modules connected to their introduction epochs. The 10 removed `fourstage` modules cluster around the 2012 birth epoch. The 10 newly born modules fan out to later epochs. This is an automatic "what changed" view.
+
+---
+
+## Scene 8 — "Graph Visualization" (~4 min)
 
 **Talking point:** *Let me show you this in the graph viewer — you can see the temporal structure visually.*
 
@@ -443,9 +592,11 @@ Expand to depth 2 — you'll see two `Golden_Entity` nodes from different repos 
 | "How are epochs determined?" | Four rules in priority order: (1) first commit, (2) git release tags, (3) 180-day time windows, (4) >15% RTL file change rate |
 | "Can this work on proprietary repos?" | Yes — just needs git clone access. No cloud calls during ETL. GraphRAG entity extraction requires OpenAI or Ollama |
 | "What's the ArangoDB query latency?" | Single-repo temporal queries: <200ms. Cross-repo traversals: <2s. GraphRAG community lookups: <100ms |
-| "Can I query by author or spec section?" | Yes for author (via `GitCommit.metadata.author`). Spec-to-code links require the `RESOLVED_TO` bridge — next step via full consolidator run |
+| "Can I query by author?" | Yes — 137 authors are linked to 3,796 commits via `AUTHORED` edges. 615 `MAINTAINS` edges connect authors to their primary modules (≥3 commits, ≥10% contribution). See Scene 5. |
+| "How do RESOLVED_TO bridges work?" | We use embedding similarity to match RTL port/signal names to golden entities extracted from documentation. 214 semantic bridges currently connect code to spec. |
 | "What about proprietary Verilog formats?" | Parser handles synthesizable SystemVerilog subset. VHDL not yet supported — planned for Phase 3 extension |
-| "How many more repos can you add?" | Schema is unbounded. Each new repo adds its prefix namespace. We've tested at 4 repos / 3,796 commits; ArangoDB Community handles millions |
+| "How many more repos can you add?" | Schema is unbounded. Each new repo adds its prefix namespace. We've tested at 4 repos / 3,796 commits; ArangoDB OneShard handles millions |
+| "Is the database rebuild reproducible?" | Yes — `scripts/rebuild_database.sh` runs the full pipeline end-to-end: database creation, ingestion, inference, and graph definition. Fully idempotent. |
 
 ---
 
@@ -459,17 +610,21 @@ RETURN {
   RTL_Module:        LENGTH(RTL_Module),
   DesignEpoch:       LENGTH(DesignEpoch),
   DesignSituation:   LENGTH(DesignSituation),
-  BELONGS_TO_EPOCH:  LENGTH(BELONGS_TO_EPOCH),
+  Author:            LENGTH(Author),
+  AUTHORED:          LENGTH(AUTHORED),
+  MAINTAINS:         LENGTH(MAINTAINS),
+  RESOLVED_TO:       LENGTH(RESOLVED_TO),
   CROSS_REPO_SIMILAR_TO:    LENGTH(CROSS_REPO_SIMILAR_TO),
   CROSS_REPO_EVOLVED_FROM:  LENGTH(CROSS_REPO_EVOLVED_FROM),
-  OR1200_entities:   LENGTH(OR1200_Entities),
-  MOR1KX_entities:   LENGTH(MOR1KX_Entities),
-  IBEX_entities:     LENGTH(IBEX_Entities),
-  MAROCCHINO_entities: LENGTH(MAROCCHINO_Entities)
+  OR1200_golden:     LENGTH(OR1200_Golden_Entities),
+  MOR1KX_golden:     LENGTH(MOR1KX_Golden_Entities),
+  IBEX_golden:       LENGTH(IBEX_Golden_Entities),
+  MAROCCHINO_golden: LENGTH(MAROCCHINO_Golden_Entities)
 }
 ```
 
 **Healthy expected values:**
-- GitCommit: 3,796, RTL_Module: 6,404, DesignEpoch: 381, DesignSituation: 721
-- BELONGS_TO_EPOCH: 6,418, CROSS_REPO_SIMILAR_TO: 61, RESOLVED_TO: 193
-- OR1200_entities: 157, MOR1KX_entities: 38, IBEX_entities: 67, MAROCCHINO_entities: 55
+- GitCommit: 3,796 | RTL_Module: 6,404 | DesignEpoch: 381 | DesignSituation: 721
+- Author: 137 | AUTHORED: 3,796 | MAINTAINS: 615
+- RESOLVED_TO: 214 | CROSS_REPO_SIMILAR_TO: 72 | CROSS_REPO_EVOLVED_FROM: 1
+- OR1200_golden: 170 | MOR1KX_golden: 39 | IBEX_golden: 546 | MAROCCHINO_golden: 120

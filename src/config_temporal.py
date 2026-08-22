@@ -150,8 +150,11 @@ def get_repo_config(name: str) -> dict | None:
 
 def get_local_path(repo_config: dict) -> str:
     """Return the local filesystem path for a repo clone."""
-    if repo_config.get("local_path"):
-        return repo_config["local_path"]
+    lp = repo_config.get("local_path")
+    if lp:
+        if os.path.isabs(lp):
+            return lp
+        return os.path.join(PROJECT_ROOT, lp)
     return os.path.join(REPOS_DIR, repo_config["name"])
 
 

@@ -30,7 +30,7 @@ if _src not in sys.path:
 from dotenv import load_dotenv
 load_dotenv()
 
-from config_temporal import ARANGO_DATABASE, REPO_REGISTRY, load_repo_registry
+from config_temporal import ARANGO_DATABASE, ARANGO_ENDPOINT, REPO_REGISTRY, load_repo_registry
 from db_utils import get_temporal_db, ensure_collection
 from utils import cosine_similarity
 
