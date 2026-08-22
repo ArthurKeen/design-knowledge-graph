@@ -115,7 +115,7 @@ Viewpoint link collections and their targets:
 
 Fields:
 - **`background.color`**: hex color (base/default color)
-- **`background.iconName`**: Font Awesome 6 format — `fa6-solid:user`, `fa6-solid:building`, `fa6-solid:ship`, `fa6-solid:plane`, `fa6-solid:server`, `fa6-solid:cube`, `fa6-solid:shapes`, `fa6-solid:database`, `fa6-solid:link`, `fa6-solid:credit-card`, `fa6-solid:vial`, `fa6-solid:triangle-exclamation`
+- **`background.iconName`**: `<set>:<name>` — e.g. `mdi:user`, `fa6-solid:user`. **The resolvable set is Visualizer-version-dependent** — the current Graph Visualizer resolves **Material Design Icons** (`mdi:`), and `fa6-solid:` did not resolve in at least one deployment (silent fallback to the generic glyph). See the icon-set note under *LPG graphs* below; prefer `mdi:` unless confirmed otherwise.
 - **`labelAttribute`**: document field to show as the node label. **Must match a field that actually exists on the document** — nodes silently show empty labels if the field is missing.
 - **`hoverInfoAttributes`**: fields shown on hover. Include `inferredRisk`/`riskScore` for risk-themed graphs.
 - **`rules`**: conditional styling rules (see below)
@@ -166,7 +166,7 @@ Field meanings:
 - **`attributePath`**: the document attribute the rule keys off (e.g. `inferredRisk`, `dataSource`).
 - **`attributeType`**: `"number"` or `"string"`.
 - **`conditionType`**: `"singleValue"` for a single comparison (the only verified type).
-- **`condition.op`**: operator string — `">="`, `"<="`, `"<"`, `">"`, `"=="`, etc.
+- **`condition.op`**: operator string. **Equality is a single `"="`** — a `"=="` renders as an empty "Select condition" in the Attribute-based tab and the rule never matches (verified against the live Visualizer). Comparison operators are `">="`, `"<="`, `"<"`, `">"`.
 - **`condition.right`**: `{ "type": "literal", "value": <number-or-string> }` — the comparison value. Numbers are bare; strings are plain (no quotes).
 - **`condition.config`**: the style applied when the rule matches. Mirrors a node config (`background.color` / `background.iconName`, `labelAttribute`, `hoverInfoAttributes`, nested `rules: []`). `iconName` defaults to `"mdi:table"` even when unused.
 - **`condition.enabledFields`**: which parts of `config` are active — `{ "color": true/false, "icon": …, "labelAttribute": …, "hoverInfoAttributes": … }`. To color only, set `color: true` and the rest `false`.
@@ -203,6 +203,108 @@ Why this order: "Medium" (`< 0.7`) would also match the Low bucket if it came fi
 **Nodes with a missing/null attribute** match no rule and fall back to the base `background.color`.
 
 > **Authoring tip:** when in doubt about the exact shape for a new operator/condition type, create one rule in the Visualizer UI, **Save** the theme, then read the stored doc back from `_graphThemeStore` and use it as the template (the theme must be non-default to be saveable — see below). Edge rules use an analogous nested `condition` but with `lineStyle` in `config`; author one in the UI to confirm before scripting.
+
+### LPG graphs: style by a discriminator property (one node + one edge collection)
+
+Many graphs are **labeled property graphs (LPGs)**: a SINGLE node collection (e.g.
+`Node`) and a SINGLE edge collection (e.g. `relations`), where the real entity /
+relationship *kind* lives in a **property** (commonly `type`) — not in the collection
+name. `nodeConfigMap`/`edgeConfigMap` key on the **collection name**, so they cannot
+express per-kind styling on their own. Instead, put all per-kind styling in the base
+collection config's **`rules`** array: **one attribute-based rule per kind, keyed on
+the discriminator property** (the same rule schema documented above, with
+`attributePath: "type"`).
+
+This is exactly what the Visualizer UI's **"Attribute-based"** tab does — pick the
+property (`type`), operator (`=`), and a value (e.g. `SEGMENT`), then set Color / Icon
+/ Label. Each such UI rule is one entry in the `rules` array:
+
+```json
+"nodeConfigMap": {
+  "Node": {                                   // the single node collection
+    "background": { "color": "#a0aec0", "iconName": "mdi:circle-outline" },  // base = "other"
+    "labelAttribute": "name",
+    "hoverInfoAttributes": ["name", "type"],
+    "rules": [                                 // one rule per styled `type` value
+      { "id": "<uuid4>", "attributePath": "type", "attributeType": "string",
+        "conditionType": "singleValue",
+        "condition": { "op": "=", "right": { "type": "literal", "value": "SEGMENT" },
+          "config": { "background": { "color": "#4a5568", "iconName": "mdi:chart-pie" },
+                      "labelAttribute": "name", "hoverInfoAttributes": ["name","type"], "rules": [] },
+          "enabledFields": { "color": true, "icon": true, "labelAttribute": false, "hoverInfoAttributes": false } } }
+      // ... one rule per styled type ...
+    ]
+  }
+}
+```
+
+Edges are identical but keyed on the edge collection (e.g. `relations`) with
+`lineStyle` in each rule's `config` instead of `background`:
+
+```json
+"edgeConfigMap": {
+  "relations": {
+    "lineStyle": { "color": "#cbd5e0", "thickness": 1.0 },   // base line = "other"
+    "labelAttribute": "type",
+    "rules": [
+      { "id": "<uuid4>", "attributePath": "type", "attributeType": "string",
+        "conditionType": "singleValue",
+        "condition": { "op": "=", "right": { "type": "literal", "value": "operates_in" },
+          "config": { "lineStyle": { "color": "#4c51bf", "thickness": 1.0 }, "labelAttribute": "type", "hoverInfoAttributes": [], "rules": [] },
+          "enabledFields": { "color": true, "icon": false, "labelAttribute": false, "hoverInfoAttributes": false } } }
+    ]
+  }
+}
+```
+
+> **Icon set is version-dependent.** The current Graph Visualizer resolves **Material
+> Design Icons** — the icon picker searches MDI names (`segment`, `abacus`,
+> `access-point`, …) and stores them as `mdi:<name>`. In at least one deployment,
+> `fa6-solid:` names did **not** resolve: the whole rule config was silently rejected and
+> nodes fell back to the generic glyph (uniform, no per-type colour/icon). Prefer `mdi:`
+> unless you have confirmed otherwise by authoring one rule in the UI, saving, and reading
+> back the stored `iconName`.
+
+### High-cardinality types: cover the Pareto head, not the whole tail
+
+Extraction-driven LPGs often carry a **long tail** of `type` values — hundreds to tens
+of thousands of distinct strings, most occurring only a handful of times. Do **not**
+author a rule per value: it's unmaintainable, bloats the theme document, and buys almost
+no visual coverage. Type frequency is nearly always **Pareto-distributed** — a small head
+covers the overwhelming majority of instances; the rest can safely fall back to the base
+style. This applies to **both node types and edge types**.
+
+**Method:**
+1. **Measure the distribution first** (before authoring any rules):
+   ```aql
+   // node types — swap in `relations` / edge collection for edge types
+   FOR n IN Node COLLECT t = n.type WITH COUNT INTO c SORT c DESC RETURN { t, c }
+   ```
+   Note the total instance count and the distinct-type count, then walk the sorted list
+   accumulating a running fraction of the total to see where the head ends.
+2. **Pick a coverage target** (e.g. 90–95% of instances) and style only the head that
+   reaches it. **State the target and what it covers in a comment — never silently cap.**
+3. **Group for legibility.** Prefer a handful of **semantic families** (shared colour per
+   family, distinct icon per member) over one arbitrary colour per type. Curated families
+   beat pure top-N auto-assignment: the colour itself then carries meaning ("all financial
+   metrics are blue"), and a family naturally absorbs canonical spelling variants.
+4. **Everything else falls back** to the base collection `background` / `lineStyle` — a
+   neutral colour that reads as "other".
+
+**Worked example (FinReflectKG, measured).** 3.1 M nodes across **9,605** distinct node
+`type` values; 17.5 M edges across **30,535** distinct edge `type` values — both sharply
+Pareto:
+
+| | distinct types | head styled | instance coverage |
+|---|---:|---:|---:|
+| nodes (`Node.type`) | 9,605 | 59 rules in 13 colour families | ~98.6% |
+| edges (`relations.type`) | 30,535 | 59 rules in 7 colour families | ~91.4% |
+
+`FIN_METRIC` alone is ~37% of nodes and `discloses` alone is ~45% of edges (the top 15
+edge types already cover ~82%), so a modest head does almost all the work. Reference
+implementation: `FinReflectKG/scripts/install_visualizer.py` — `NODE_FAMILIES` /
+`EDGE_FAMILIES` fanned out through `_node_rule` / `_edge_rule` into the base config's
+`rules` array, with deterministic per-rule UUIDs.
 
 ### Multiple themes per graph
 
@@ -519,11 +621,14 @@ For **ontology graphs** (Class, Property, Ontology, ObjectProperty, etc.):
 - The theme is marked `isDefault: true`. Set it to `false` (and make the built-in `Default` theme the default instead), then reload the Visualizer and re-edit.
 
 ### Icons show as generic shapes
-- Wrong field structure. Use `"background": {"color": "#hex", "iconName": "fa6-solid:user"}`. NOT flat `"color"`, `"icon"`.
-- Invalid FA6 icon name — must start with `fa6-solid:` or `fa6-regular:`.
+- Wrong field structure. Use `"background": {"color": "#hex", "iconName": "mdi:account"}`. NOT flat `"color"`, `"icon"`.
+- Unresolvable icon set. The current Visualizer resolves `mdi:` (Material Design Icons); `fa6-solid:` / `fa6-regular:` did **not** resolve in at least one deployment — the rule config is rejected and the node falls back to the generic glyph. Prefer `mdi:`; confirm by authoring one rule in the UI and reading back the stored `iconName`.
+
+### Two "Default" themes in the Legend
+- The Visualizer AUTO-CREATES its own "Default" theme (name "Default", description "Default graph theme") the first time the graph is opened. If your installer *also* unconditionally creates a plain "Default", you end up with two. **Fix:** query for an existing "Default" for the graph, reuse it (prefer the built-in — identify it by `description == "Default graph theme"`), delete any extras, and only create your own when none exists. Reference: `install_theme()` in `FinReflectKG/scripts/install_visualizer.py`.
 
 ### Default theme lost after database recreation
-- Always install a plain "Default" theme (`isDefault: false`) alongside custom themes.
+- The Visualizer recreates its built-in "Default" when the graph is next opened, so prefer reusing it (see above). Only create your own plain "Default" (`isDefault: false`) when none exists — creating one unconditionally duplicates the built-in.
 
 ### `edge_definitions()` key ambiguity (python-arango vs AQL)
 - `g.edge_definitions()` (python-arango SDK) returns dicts with key `"edge_collection"`.
