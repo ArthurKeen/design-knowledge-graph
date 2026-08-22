@@ -1,0 +1,4 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-arango>=7.5.0
+python-dotenv>=1.0

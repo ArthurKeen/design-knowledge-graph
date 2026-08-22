@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ChronoGraph — IC Temporal Provenance Visualizer</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script src="/static/vendor/cytoscape.min.js"></script>
+  <script src="/static/vendor/layout-base.js"></script>
+  <script src="/static/vendor/cose-base.js"></script>
+  <script src="/static/vendor/cytoscape-fcose.js"></script>
+</head>
+<body>
+  <!-- ── Top bar ─────────────────────────────────────────────── -->
+  <header id="topbar">
+    <div class="brand">
+      <span class="logo">◷</span>
+      <div>
+        <div class="title">ChronoGraph</div>
+        <div class="subtitle">IC temporal &amp; provenance explorer</div>
+      </div>
+    </div>
+
+    <div class="tb-group" id="repoToggles" title="Projects (repositories)"></div>
+
+    <div class="tb-group projection">
+      <span class="tb-label">Projection</span>
+      <div class="seg" id="projectionSeg">
+        <button data-proj="traceability" class="active">Traceability</button>
+        <button data-proj="consolidated">Consolidated</button>
+      </div>
+    </div>
+
+    <div class="tb-group search">
+      <input id="searchBox" type="text" placeholder="Search modules…" autocomplete="off" />
+      <div id="searchResults" class="dropdown hidden"></div>
+    </div>
+
+    <div class="tb-group right">
+      <button id="fitBtn" class="icon-btn" title="Fit graph to view">⤢</button>
+      <button id="relayoutBtn" class="icon-btn" title="Re-run layout">↻</button>
+      <button id="themeBtn" class="icon-btn" title="Toggle light/dark">☾</button>
+      <span id="sourceBadge" class="src-badge" title="Active data source">…</span>
+    </div>
+  </header>
+
+  <!-- ── Main body ───────────────────────────────────────────── -->
+  <main>
+    <aside id="leftPanel">
+      <section class="panel-block">
+        <h3>Time cursor</h3>
+        <div id="dateReadout" class="date-readout">—</div>
+        <div id="epochContext" class="epoch-context"></div>
+      </section>
+      <section class="panel-block">
+        <h3>At this moment</h3>
+        <div id="sliceStats" class="slice-stats">—</div>
+      </section>
+      <section class="panel-block">
+        <h3>Legend</h3>
+        <div id="legend" class="legend"></div>
+      </section>
+      <section class="panel-block grow">
+        <h3>Filters</h3>
+        <label class="chk"><input type="checkbox" id="showDepends" checked /> module dependencies</label>
+        <label class="chk"><input type="checkbox" id="showCross" checked /> cross-project links</label>
+        <label class="chk"><input type="checkbox" id="onlyProvenance" /> only nodes with provenance</label>
+      </section>
+    </aside>
+
+    <div id="graphWrap">
+      <div id="cy"></div>
+      <div id="graphHint" class="graph-hint">Click a node to trace its provenance • drag the timeline to travel through time</div>
+      <div id="loading" class="loading hidden"><div class="spinner"></div></div>
+    </div>
+
+    <aside id="inspector" class="collapsed">
+      <div id="inspectorBody">
+        <div class="inspector-empty">
+          <div class="ie-icon">⌖</div>
+          <p>Select a node to see its full provenance:<br/>source text, Verilog, structure, lineage.</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ── Timeline ────────────────────────────────────────────── -->
+  <footer id="timeline">
+    <div class="tl-controls">
+      <button id="stepEpochBack" class="icon-btn" title="Previous epoch">⏮</button>
+      <button id="playBtn" class="icon-btn play" title="Play / pause">▶</button>
+      <button id="stepEpochFwd" class="icon-btn" title="Next epoch">⏭</button>
+      <div class="tl-speed">
+        <label>speed</label>
+        <input type="range" id="speed" min="1" max="60" value="18" />
+      </div>
+      <div class="tl-jump">
+        <button id="jumpStart" class="mini">⟸ origin</button>
+        <button id="jumpEnd" class="mini">now ⟹</button>
+      </div>
+    </div>
+    <div id="tlSvgWrap"><svg id="tlSvg"></svg></div>
+  </footer>
+
+  <!-- ── Source viewer overlay ───────────────────────────────── -->
+  <div id="sourceOverlay" class="overlay hidden">
+    <div class="overlay-card">
+      <div class="overlay-head">
+        <div>
+          <span id="srcKind" class="src-kind"></span>
+          <span id="srcTitle" class="src-title"></span>
+        </div>
+        <button id="srcClose" class="icon-btn">✕</button>
+      </div>
+      <pre id="srcBody" class="src-body"></pre>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/graph.js"></script>
+  <script src="/static/js/timeline.js"></script>
+  <script src="/static/js/inspector.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
