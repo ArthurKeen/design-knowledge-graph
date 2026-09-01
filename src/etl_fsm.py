@@ -140,9 +140,16 @@ class FSMExtractor:
                 is_state = True
             
             # Method 3: Matches FSM prefix pattern (e.g., OR1200_DCFSM_*)
+            # Excludes structural suffixes (WIDTH is the state register's own
+            # bit-width, e.g. `define OR1200_EXCEPTFSM_WIDTH 3 -- it always
+            # self-matches here since it's what *defines* the prefix being
+            # tested, not an encoded state value).
+            NON_STATE_SUFFIXES = {'WIDTH', 'SIZE', 'DEPTH'}
             for prefix in fsm_prefixes:
                 if param_name.startswith(prefix + '_'):
-                    is_state = True
+                    suffix = param_name[len(prefix) + 1:].upper()
+                    if suffix not in NON_STATE_SUFFIXES:
+                        is_state = True
                     break
             
             # Method 4: Value looks like a state encoding (e.g., 3'b000, 4'd0)
