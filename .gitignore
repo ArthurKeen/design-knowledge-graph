@@ -39,6 +39,7 @@ build/
 # Local pre-refresh safety dumps (see docs/DATA_REFRESH_PLAN.md)
 backups/
 .prd-drift-queue/
+.pattern-capture-queue/
 .claude/
 CLAUDE.md
 .no-drift-gate
