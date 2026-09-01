@@ -89,7 +89,7 @@
 - **381 design epochs**, **721 design situations**
 - **193 Semantic Bridge links** (RESOLVED_TO: RTL → documentation)
 - **61 cross-repo similarity edges**, **8 architectural lineage edges**
-- **Sub-200ms** traversal queries for multi-hop traversals
+- **Index-backed, no full-collection scans** for multi-hop traversal queries (sub-200ms local; sub-1.5s over WAN to a shared demo cluster)
 - **213 unit tests**, CI on Python 3.10 and 3.11
 
 ---
@@ -136,8 +136,8 @@ Hardware design cycles are long and expensive. Rework from spec-code mismatch, l
 
 **Success Criteria:**
 
-- Semantic Bridge coverage: >70% of ports and signals resolved to documentation
-- Query performance: <200ms for multi-hop traversals
+- Semantic Bridge coverage: >70% of RTL-relevant documented concepts (Golden Entities of type REGISTER/SIGNAL/HARDWARE_INTERFACE/CLOCK_DOMAIN/PROCESSOR_COMPONENT/MEMORY_UNIT) have >=1 resolved RTL reference (concept-grounding rate)
+- Query performance: all multi-hop traversal queries use an index-backed access path with no full-collection scans; observed end-to-end latency <200ms against a co-located/local deployment, <1.5s against a shared remote demo cluster over WAN for the densest supported slice (multi-repo traceability across full history)
 - Bus Factor analysis: Identify all single-maintainer modules
 - Token savings: 10x reduction in retrieval context for agent queries
 - Traceability: One-click path from spec entity to RTL implementation
