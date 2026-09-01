@@ -22,6 +22,13 @@ from typing import Callable, Optional
 
 from arango import ArangoClient
 from arango.database import StandardDatabase
+from dotenv import load_dotenv
+
+# Every other entry point picks up .env as a side effect of `from config import
+# ...` (config.py calls load_dotenv() at import time). This module doesn't
+# import config, so without this it silently falls through to the hardcoded
+# localhost:8530/root/"" defaults below instead of the real cluster.
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -59,8 +66,14 @@ FOR doc IN @@coll
     )[0]
     SORT score DESC
     LIMIT @top_k
-    RETURN MERGE(doc, {_score: score, _collection: @@coll})
+    RETURN MERGE(doc, {_score: score, _collection: @coll_name})
 """
+# NOTE: @@coll is a collection-name bind param, valid only where a collection
+# is syntactically expected (here: `FOR doc IN @@coll`). This cluster (same
+# AMP planner as the ERR 4 CONTAINS/LIKE issue documented in
+# cross_repo_bridge.py) rejects reusing it as a plain value with
+# "ERR 1568 collection used as expression operand" -- hence the separate
+# @coll_name plain-string bind param for the _collection field below.
 
 _AQL_RESOLVED_TO = """
 FOR edge IN RESOLVED_TO
@@ -71,7 +84,7 @@ FOR edge IN RESOLVED_TO
         name:   rtl.name,
         type:   SPLIT(edge._from, "/")[0],
         score:  edge.score,
-        method: edge.match_method,
+        method: edge.method,
         repo:   rtl.repo
     }
 """
@@ -91,12 +104,18 @@ FOR doc IN @@coll
 """
 
 _AQL_MENTIONED_IN = """
-FOR v, e IN 1..1 OUTBOUND @golden_id @@mention_edge
-    LET chunk = DOCUMENT(v._id)
+LET chunk_ids = UNIQUE(
+    FOR c IN @@consolidates_edge
+        FILTER c._from == @golden_id
+        FOR e IN @@mention_edge
+            FILTER e._from == c._to
+            RETURN e._to
+)
+FOR cid IN chunk_ids
+    LET chunk = DOCUMENT(cid)
     FILTER chunk != null
-    SORT e.frequency DESC
     LIMIT @limit
-    RETURN {content: chunk.content, source: chunk.source_id, frequency: e.frequency}
+    RETURN {content: chunk.text, source: chunk.doc_basename, section: chunk.section_header}
 """
 
 
@@ -243,7 +262,8 @@ class GraphRetriever:
             try:
                 rows = list(self._db.aql.execute(
                     _AQL_EMBED_SEARCH,
-                    bind_vars={"@coll": coll, "qvec": qvec, "top_k": self.top_k_golden},
+                    bind_vars={"@coll": coll, "coll_name": coll, "qvec": qvec,
+                              "top_k": self.top_k_golden},
                 ))
                 candidates.extend(rows)
             except Exception:
@@ -272,8 +292,8 @@ class GraphRetriever:
     def _word_fallback(self, coll: str) -> list:
         try:
             return list(self._db.aql.execute(
-                "FOR d IN @@c LIMIT 20 RETURN MERGE(d, {_score: 0, _collection: @@c})",
-                bind_vars={"@c": coll},
+                "FOR d IN @@c LIMIT 20 RETURN MERGE(d, {_score: 0, _collection: @cname})",
+                bind_vars={"@c": coll, "cname": coll},
             ))
         except Exception:
             return []
@@ -325,14 +345,20 @@ class GraphRetriever:
             return []
 
     def _get_doc_chunks(self, hit: GoldenHit) -> list:
+        # Golden Entities have no direct edge to Chunks: the real path is
+        # Golden --Consolidates--> (raw) Entities --MentionedIn--> Chunks.
+        # Consolidates collections follow the same {repo}_Consolidates naming
+        # convention as MENTION_EDGES's {repo}_MentionedIn.
         repo = hit.collection.replace(self.GOLDEN_SUFFIX, "")
         edge = self.MENTION_EDGES.get(repo)
-        if not edge or not self._db.has_collection(edge):
+        consolidates = f"{repo}_Consolidates"
+        if not edge or not self._db.has_collection(edge) or not self._db.has_collection(consolidates):
             return []
         try:
             return list(self._db.aql.execute(
                 _AQL_MENTIONED_IN,
                 bind_vars={"golden_id": hit.id, "@mention_edge": edge,
+                           "@consolidates_edge": consolidates,
                            "limit": self.top_k_chunks},
             ))
         except Exception:
@@ -444,14 +470,13 @@ class GraphRetriever:
 # ---------------------------------------------------------------------------
 
 def _build_retriever_from_env() -> GraphRetriever:
-    try:
-        from config import ARANGO_HOST, ARANGO_DB, ARANGO_USER, ARANGO_PASSWORD
-        return GraphRetriever(
-            host=ARANGO_HOST, db_name=ARANGO_DB,
-            username=ARANGO_USER, password=ARANGO_PASSWORD,
-        )
-    except ImportError:
-        return GraphRetriever()
+    # config.py defines ARANGO_ENDPOINT/ARANGO_DATABASE/ARANGO_USERNAME, not the
+    # ARANGO_HOST/ARANGO_DB/ARANGO_USER names this used to import (always raised
+    # ImportError, silently falling through to GraphRetriever()'s own hardcoded
+    # localhost:8530 defaults). GraphRetriever.__init__ already reads the real
+    # env vars directly (with these names as optional aliases) now that .env is
+    # actually loaded at module import time, so no explicit args are needed.
+    return GraphRetriever()
 
 
 def main() -> None:
