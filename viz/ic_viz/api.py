@@ -1,5 +1,11 @@
 """
 api.py — FastAPI app for ChronoGraph. Serves the JSON contract + the static SPA.
+
+When deployed on the Arango platform (BYOC, see viz/DEPLOY.md) the service lives
+under a mount prefix; set SERVICE_URL_PATH_PREFIX and ``asgi_app`` strips it
+before routing (ic_viz/prefix.py). The front-end only uses relative URLs, so it
+needs no build-time prefix. Run ``ic_viz.api:asgi_app`` — it is ``app`` itself
+when no prefix is configured.
 """
 from __future__ import annotations
 
@@ -10,7 +16,9 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import __version__
 from .datasource import get_source
+from .prefix import StripServicePrefixMiddleware, configured_prefix
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VIZ_DIR = os.path.dirname(HERE)
@@ -25,6 +33,13 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"ok": True, "source": src.kind}
+
+    @app.get("/healthz")
+    def healthz():
+        """Liveness + release proof for the platform deploy verifier: a 200 on
+        ``/`` is served just as happily by the build being replaced, so the
+        verifier compares this version to the release it uploaded."""
+        return {"ok": True, "version": __version__, "source": src.kind}
 
     @app.get("/api/repos")
     def repos():
@@ -76,4 +91,12 @@ def create_app() -> FastAPI:
     return app
 
 
+def with_prefix(inner, prefix: str | None = None):
+    """``inner`` wrapped for a mount prefix (env SERVICE_URL_PATH_PREFIX by
+    default). Returns ``inner`` unchanged when no prefix is configured."""
+    prefix = configured_prefix() if prefix is None else prefix
+    return StripServicePrefixMiddleware(inner, prefix) if prefix else inner
+
+
 app = create_app()
+asgi_app = with_prefix(app)
