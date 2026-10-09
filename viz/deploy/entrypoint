@@ -8,7 +8,9 @@ entrypoint = __file__
 # ic_viz/datasource.py already looks for it):
 #   1. install requirements.txt into this interpreter (uv if present, else pip —
 #      py12base on the pilot cluster ships no uv)
-#   2. load the baked .env; refuse a loopback ARANGO_ENDPOINT (no ArangoDB in this pod)
+#   2. load the baked .env; refuse a loopback ARANGO_ENDPOINT (no ArangoDB in this pod).
+#      With platform login (the default bundle) no password is needed; a bundle
+#      built with --with-credentials must carry one.
 #   3. exec uvicorn on ic_viz.api:asgi_app, port $PORT or 8000
 # Ported from project-sentinel's scripts/platform/entrypoint (verified live on
 # prod.demo.pilot.arango.ai).
@@ -92,21 +94,44 @@ def _fail_if_loopback(endpoint: str) -> None:
                  "(viz/deploy/package.sh) or set CHRONO_ALLOW_LOOPBACK_ARANGO=1.")
 
 
+def _platform_login(env) -> bool:
+    """Whether requests read the database as the signed-in platform user, on
+    the injected endpoint (ic_viz/platform_auth.py), so no password is needed."""
+    return bool(env.get("ARANGO_DEPLOYMENT_ENDPOINT")) and (
+        env.get("CHRONO_PLATFORM_AUTH", "auto").strip().lower() not in ("off", "0", "false", "no"))
+
+
+def _login_problem(env) -> str | None:
+    """Why the service could not reach the database as anyone, or ``None``."""
+    if _platform_login(env):
+        return None
+    if not env.get("ARANGO_ENDPOINT") or not env.get("ARANGO_PASSWORD"):
+        return ("no platform login (ARANGO_DEPLOYMENT_ENDPOINT not injected, or "
+                "CHRONO_PLATFORM_AUTH=off) and ARANGO_ENDPOINT / ARANGO_PASSWORD not set — "
+                "rebuild with viz/deploy/package.sh --with-credentials")
+    return None
+
+
 def main() -> None:
     os.chdir(ROOT)
     _log(f"ChronoGraph BYOC entrypoint in {ROOT} (python {sys.version.split()[0]})")
     _install_dependencies()
     _load_dotenv_into_environ()
     endpoint = os.environ.get("ARANGO_ENDPOINT", "")
-    if not endpoint or not os.environ.get("ARANGO_PASSWORD"):
-        sys.exit("ERROR: ARANGO_ENDPOINT / ARANGO_PASSWORD not set — the bundle's .env "
-                 "is missing or incomplete")
-    _fail_if_loopback(endpoint)
+    problem = _login_problem(os.environ)
+    if problem:
+        sys.exit(f"ERROR: {problem}")
+    if _platform_login(os.environ):
+        _log("login: the signed-in platform user (injected ARANGO_DEPLOYMENT_ENDPOINT)")
+        user = "(each signed-in user)"
+    else:
+        user = os.environ.get("ARANGO_USERNAME", "?")
+    if endpoint:
+        _fail_if_loopback(endpoint)
     prefix = os.environ.get("SERVICE_URL_PATH_PREFIX", "")
     port = os.environ.get("PORT") or os.environ.get("BACKEND_PORT") or "8000"
     _log(f"ArangoDB endpoint: {endpoint}  db: {os.environ.get('ARANGO_DATABASE', '?')}  "
-         f"user: {os.environ.get('ARANGO_USERNAME', '?')}  source: "
-         f"{os.environ.get('CHRONO_SOURCE', 'auto')}")
+         f"user: {user}  source: {os.environ.get('CHRONO_SOURCE', 'auto')}")
     _log(f"mount prefix: {prefix or '(none)'}  listening on 0.0.0.0:{port}")
     os.environ["PYTHONPATH"] = str(APP_DIR) + (os.pathsep + os.environ["PYTHONPATH"]
                                                if os.environ.get("PYTHONPATH") else "")

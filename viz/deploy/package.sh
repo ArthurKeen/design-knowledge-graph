@@ -8,20 +8,24 @@
 #   requirements.txt      viz/requirements.txt
 #   README.md             viz/README.md
 #   viz/ic_viz/, viz/web/ the app (no __pycache__, no snapshot — live DB only)
-#   .env                  SANITIZED allowlist: endpoint, service-account creds,
-#                         database, mount prefix, CHRONO_SOURCE=arango. Never an
-#                         *_API_KEY. The platform injects no environment, so the
-#                         credentials travel in the bundle — THE TARBALL IS A SECRET
-#                         (gitignored; do not share it).
+#   .env                  SANITIZED allowlist: endpoint, database, mount prefix,
+#                         CHRONO_SOURCE=arango. Never an *_API_KEY. By default no
+#                         account either: on the platform ChronoGraph reads as the
+#                         signed-in user (viz/ic_viz/platform_auth.py), so each
+#                         person needs read access to the database.
 #
-# Credentials baked: SERVICE_ARANGO_USERNAME / SERVICE_ARANGO_PASSWORD (env or
+# --with-credentials builds the older kind of bundle, with an account baked in
+# and platform login off (CHRONO_PLATFORM_AUTH=off); that tarball IS A SECRET
+# (gitignored; do not share it).
+#
+# Credentials baked (--with-credentials only): SERVICE_ARANGO_USERNAME / SERVICE_ARANGO_PASSWORD (env or
 # repo-root .env) — a dedicated low-privilege account. Without them it falls back
 # to ARANGO_USERNAME / ARANGO_PASSWORD but REFUSES to bake `root` unless
 # --allow-root is given (ChronoGraph only reads; root on a shared cluster would
 # put every database on it one `tar -x` away from anyone holding the bundle).
 #
 # Usage:
-#   viz/deploy/package.sh [OUT] [--instance NAME] [--db NAME] [--global] [--allow-root]
+#   viz/deploy/package.sh [OUT] [--instance NAME] [--db NAME] [--global] [--with-credentials [--allow-root]]
 set -euo pipefail
 export COPYFILE_DISABLE=1   # no AppleDouble / xattr PAX headers on macOS
 
@@ -33,13 +37,15 @@ INSTANCE="${INSTANCE:-chronograph}"
 DB="${DB:-}"
 GLOBAL=0
 ALLOW_ROOT=0
+WITH_CREDENTIALS=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --instance) INSTANCE="$2"; shift 2 ;;
     --db) DB="$2"; shift 2 ;;
     --global) GLOBAL=1; shift ;;
     --allow-root) ALLOW_ROOT=1; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    --with-credentials) WITH_CREDENTIALS=1; shift ;;
+    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     *) OUT="$1"; shift ;;
   esac
 done
@@ -53,21 +59,25 @@ envval() {  # envval KEY -> value from environ, else from .env (quotes stripped)
   printf '%s' "${val}"
 }
 ENDPOINT="$(envval ARANGO_ENDPOINT)"
-USER_="$(envval SERVICE_ARANGO_USERNAME)"
-PASSWORD="$(envval SERVICE_ARANGO_PASSWORD)"
-if [[ -z "${USER_}" || -z "${PASSWORD}" ]]; then
-  USER_="$(envval ARANGO_USERNAME)"; [[ -n "${USER_}" ]] || USER_="$(envval ARANGO_USER)"
-  PASSWORD="$(envval ARANGO_PASSWORD)"
-  echo "warning: SERVICE_ARANGO_USERNAME/PASSWORD not set — falling back to ARANGO_USERNAME (${USER_})" >&2
-fi
 [[ -n "${DB}" ]] || DB="$(envval ARANGO_DATABASE)"
-
-[[ -n "${ENDPOINT}" && -n "${USER_}" && -n "${PASSWORD}" && -n "${DB}" ]] || {
-  echo "error: need ARANGO_ENDPOINT, ARANGO_DATABASE and service credentials (env or .env)" >&2; exit 1; }
+[[ -n "${ENDPOINT}" && -n "${DB}" ]] || {
+  echo "error: need ARANGO_ENDPOINT and ARANGO_DATABASE (env or .env)" >&2; exit 1; }
 case "${ENDPOINT}" in *localhost*|*127.0.0.1*)
   echo "error: ARANGO_ENDPOINT=${ENDPOINT} is loopback — unreachable from the platform" >&2; exit 1 ;;
 esac
-if [[ "${USER_}" == "root" && "${ALLOW_ROOT}" != "1" ]]; then
+USER_=""; PASSWORD=""
+if [[ "${WITH_CREDENTIALS}" == "1" ]]; then
+  USER_="$(envval SERVICE_ARANGO_USERNAME)"
+  PASSWORD="$(envval SERVICE_ARANGO_PASSWORD)"
+  if [[ -z "${USER_}" || -z "${PASSWORD}" ]]; then
+    USER_="$(envval ARANGO_USERNAME)"; [[ -n "${USER_}" ]] || USER_="$(envval ARANGO_USER)"
+    PASSWORD="$(envval ARANGO_PASSWORD)"
+    echo "warning: SERVICE_ARANGO_USERNAME/PASSWORD not set — falling back to ARANGO_USERNAME (${USER_})" >&2
+  fi
+  [[ -n "${USER_}" && -n "${PASSWORD}" ]] || {
+    echo "error: --with-credentials needs service credentials (env or .env)" >&2; exit 1; }
+fi
+if [[ "${WITH_CREDENTIALS}" == "1" && "${USER_}" == "root" && "${ALLOW_ROOT}" != "1" ]]; then
   echo "error: refusing to bake the root account into the bundle. Set" >&2
   echo "       SERVICE_ARANGO_USERNAME / SERVICE_ARANGO_PASSWORD in .env to a dedicated" >&2
   echo "       account with access to ${DB} only, or pass --allow-root deliberately." >&2
@@ -115,8 +125,11 @@ mkdir -p "${STAGE}/viz"
 {
   echo "# ChronoGraph — baked by viz/deploy/package.sh (sanitized: connection keys only)"
   echo "ARANGO_ENDPOINT=${ENDPOINT}"
-  echo "ARANGO_USERNAME=${USER_}"
-  echo "ARANGO_PASSWORD=${PASSWORD}"
+  if [[ "${WITH_CREDENTIALS}" == "1" ]]; then
+    echo "ARANGO_USERNAME=${USER_}"
+    echo "ARANGO_PASSWORD=${PASSWORD}"
+    echo "CHRONO_PLATFORM_AUTH=off"
+  fi
   echo "ARANGO_DATABASE=${DB}"
   echo "SERVICE_URL_PATH_PREFIX=${PREFIX}"
   echo "CHRONO_SOURCE=arango"
@@ -127,7 +140,11 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v xattr >/dev/null 2>&1; then xat
 tar -czf "${OUT}" -C "${STAGE}" .
 chmod 600 "${OUT}"
 SIZE="$(du -h "${OUT}" | cut -f1)"
-echo "Wrote ${OUT} (${SIZE}, flat layout, mode 600 — contains credentials)"
-echo "  release: ${VERSION}   instance: ${INSTANCE}   db: ${DB}   user: ${USER_}"
+if [[ "${WITH_CREDENTIALS}" == "1" ]]; then
+  echo "Wrote ${OUT} (${SIZE}, flat layout, mode 600 — contains credentials; platform login off)"
+else
+  echo "Wrote ${OUT} (${SIZE}, flat layout — no credentials; reads as the signed-in platform user)"
+fi
+echo "  release: ${VERSION}   instance: ${INSTANCE}   db: ${DB}   user: ${USER_:-(each signed-in platform user)}"
 echo "  mount: ${PREFIX}/"
 echo "  .env keys: $(grep -vE '^#' "${STAGE}/.env" | cut -d= -f1 | tr '\n' ' ')"

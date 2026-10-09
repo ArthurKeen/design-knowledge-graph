@@ -19,14 +19,17 @@ Usage
 Platform contract (viz/DEPLOY.md): flat tarball with a Python ``entrypoint`` at
 its root; the service listens on port 8000 and is mounted at
 ``/_service/uds/_db/<db>/<instance>/`` (trailing slash required); the platform
-injects no environment, so credentials travel baked in the bundle's ``.env``.
+injects no app environment, so settings travel baked in the bundle's ``.env``.
+By default that ``.env`` holds no account: on the platform ChronoGraph reads as
+the signed-in user. A bundle built with ``package.sh --with-credentials``
+carries a service account instead, and only then is that account checked.
 There is no in-place update: ``update`` deletes and recreates, and the service
 is gone for about a minute. Package versions are unique per name.
 
 The DEPLOY itself authenticates with the repo-root ``.env`` account
 (``ARANGO_ENDPOINT``, ``ARANGO_USERNAME``, ``ARANGO_PASSWORD``,
 ``ARANGO_DATABASE``) — that account is never baked; only package.sh's
-``SERVICE_ARANGO_*`` service account travels in the bundle. Nothing here
+``SERVICE_ARANGO_*`` service account travels in a ``--with-credentials`` bundle. Nothing here
 writes a token to disk.
 """
 
@@ -267,6 +270,12 @@ def read_baked_env(tarball: Path) -> dict[str, str]:
     return {}
 
 
+def carries_credentials(env: dict[str, str]) -> bool:
+    """Whether a baked ``.env`` holds an account (a ``--with-credentials``
+    bundle) rather than relying on the signed-in platform user."""
+    return bool(env.get("ARANGO_USERNAME") or env.get("ARANGO_PASSWORD"))
+
+
 def check_account_scope(platform: Platform, user: str, db_name: str | None, *,
                         allow_privileged: bool = False) -> None:
     """Judge the baked account by what it can DO, not by its name: a non-root
@@ -310,12 +319,19 @@ def preflight(tarball: Path, instance: str, db_name: str | None, *, allow_root: 
 
         env_text = read(".env")
         if not env_text:
-            problems.append(".env is not baked — the platform injects nothing, so the "
-                            "service would have no credentials")
+            problems.append(".env is not baked — the platform injects no app settings, so the "
+                            "service would not know its database or mount path")
         else:
             env = {k.strip(): v.strip() for k, v in
                    (l.split("=", 1) for l in env_text.splitlines() if "=" in l and not l.startswith("#"))}
-            for key in ("ARANGO_ENDPOINT", "ARANGO_USERNAME", "ARANGO_PASSWORD", "ARANGO_DATABASE"):
+            required_keys = ["ARANGO_ENDPOINT", "ARANGO_DATABASE"]
+            if carries_credentials(env):
+                required_keys += ["ARANGO_USERNAME", "ARANGO_PASSWORD"]
+                if env.get("CHRONO_PLATFORM_AUTH", "").lower() not in ("off", "0", "false", "no"):
+                    problems.append("the bundle carries an account but leaves platform login on — "
+                                    "rebuild with package.sh --with-credentials (it sets "
+                                    "CHRONO_PLATFORM_AUTH=off)")
+            for key in required_keys:
                 if not env.get(key):
                     problems.append(f"{key} missing from the baked .env")
             if re.search(r"localhost|127\.0\.0\.1", env.get("ARANGO_ENDPOINT", "")):
@@ -341,8 +357,7 @@ def preflight(tarball: Path, instance: str, db_name: str | None, *, allow_root: 
             problems.append("web/js/api.js calls root-absolute /api/... — breaks under the mount path")
     if problems:
         raise DeployError("pre-flight failed:\n  - " + "\n  - ".join(problems))
-    print("    pre-flight OK (layout, entrypoint, baked .env, service account, mount prefix, "
-          "relative URLs)")
+    print("    pre-flight OK (layout, entrypoint, baked .env, login, mount prefix, relative URLs)")
 
 
 def resolve_config(args: argparse.Namespace) -> tuple[Platform, str, str | None]:
@@ -483,8 +498,12 @@ def cmd_update(args: argparse.Namespace) -> int:
     release = read_app_version()
     print(f"==> release {release} (viz/ic_viz/__init__.py)")
     preflight(tarball, args.instance, db_name, allow_root=args.allow_root)
-    check_account_scope(platform, read_baked_env(tarball).get("ARANGO_USERNAME", ""), db_name,
-                        allow_privileged=args.allow_root)
+    baked = read_baked_env(tarball)
+    if carries_credentials(baked):
+        check_account_scope(platform, baked.get("ARANGO_USERNAME", ""), db_name,
+                            allow_privileged=args.allow_root)
+    else:
+        print(f"    login: each signed-in platform user (each needs ro or rw on {db_name or 'the database'})")
     version = args.version or next_build_version(platform, args.name, release)
     print(f"==> uploading {tarball.name} ({tarball.stat().st_size / 1_048_576:.1f} MB) as {args.name} v{version}")
     platform.upload(tarball, args.name, version)

@@ -9,9 +9,11 @@ page with a green light — so they are pinned here instead of discovered live:
    resolve under it, while staying a no-op locally.
 2. Relative URLs: no root-absolute ``/static`` or ``/api`` reference in the
    front-end (they miss the mount prefix and 404).
-3. The bundle: flat layout, entrypoint token rule, sanitized .env (service
-   account, never root by default, never an API key), prefix == mount path —
-   and byoc_deploy's pre-flight rejects each way of getting that wrong.
+3. The bundle: flat layout, entrypoint token rule, sanitized .env (by default
+   no account at all — each signed-in platform user reads as themselves; with
+   --with-credentials a service account, never root by default; never an API
+   key), prefix == mount path — and byoc_deploy's pre-flight rejects each way
+   of getting that wrong.
 """
 from __future__ import annotations
 
@@ -170,10 +172,25 @@ def _read(tarball: Path, member: str) -> str:
         return archive.extractfile(raw).read().decode()
 
 
+def _baked_env(tarball: Path) -> dict[str, str]:
+    return dict(l.split("=", 1) for l in _read(tarball, ".env").splitlines()
+                if "=" in l and not l.startswith("#"))
+
+
 @pytest.fixture(scope="module")
 def bundle(tmp_path_factory):
+    """The default bundle: platform login, no account baked."""
     out = tmp_path_factory.mktemp("bundle") / "chronograph-service.tar.gz"
     result = _run_package(out, SERVICE_ENV)
+    assert result.returncode == 0, result.stderr
+    return out
+
+
+@pytest.fixture(scope="module")
+def credentialed_bundle(tmp_path_factory):
+    """A --with-credentials bundle: a service account baked, platform login off."""
+    out = tmp_path_factory.mktemp("bundle") / "chronograph-credentials.tar.gz"
+    result = _run_package(out, SERVICE_ENV, "--with-credentials")
     assert result.returncode == 0, result.stderr
     return out
 
@@ -190,14 +207,34 @@ class TestPackage:
     def test_entrypoint_token_rule(self, bundle):
         assert _read(bundle, "entrypoint").splitlines()[0].startswith("entrypoint")
 
-    def test_baked_env_is_sanitized(self, bundle):
-        env = dict(l.split("=", 1) for l in _read(bundle, ".env").splitlines()
-                   if "=" in l and not l.startswith("#"))
-        assert set(env) == {"ARANGO_ENDPOINT", "ARANGO_USERNAME", "ARANGO_PASSWORD",
-                            "ARANGO_DATABASE", "SERVICE_URL_PATH_PREFIX", "CHRONO_SOURCE"}
-        assert env["ARANGO_USERNAME"] == "chrono-svc"
+    def test_default_bundle_bakes_no_account(self, bundle):
+        env = _baked_env(bundle)
+        assert set(env) == {"ARANGO_ENDPOINT", "ARANGO_DATABASE", "SERVICE_URL_PATH_PREFIX",
+                            "CHRONO_SOURCE"}
         assert env["SERVICE_URL_PATH_PREFIX"] == PREFIX
         assert env["CHRONO_SOURCE"] == "arango"
+        assert "s3cret" not in _read(bundle, ".env")
+
+    def test_default_bundle_needs_no_credentials_to_build(self, tmp_path):
+        out = tmp_path / "b.tar.gz"
+        result = _run_package(out, {})
+        assert result.returncode == 0, result.stderr
+        assert "no credentials" in result.stdout
+
+    def test_credentialed_bundle_bakes_the_service_account(self, credentialed_bundle):
+        env = _baked_env(credentialed_bundle)
+        assert set(env) == {"ARANGO_ENDPOINT", "ARANGO_USERNAME", "ARANGO_PASSWORD",
+                            "CHRONO_PLATFORM_AUTH", "ARANGO_DATABASE",
+                            "SERVICE_URL_PATH_PREFIX", "CHRONO_SOURCE"}
+        assert env["ARANGO_USERNAME"] == "chrono-svc"
+        assert env["CHRONO_PLATFORM_AUTH"] == "off"
+        assert env["SERVICE_URL_PATH_PREFIX"] == PREFIX
+
+    def test_credentialed_bundle_needs_credentials(self, tmp_path):
+        out = tmp_path / "b.tar.gz"
+        result = _run_package(out, {}, "--with-credentials")
+        assert result.returncode != 0 and "--with-credentials needs" in result.stderr
+        assert not out.exists()
 
     def test_api_keys_never_baked(self, tmp_path):
         out = tmp_path / "b.tar.gz"
@@ -215,11 +252,17 @@ class TestPackage:
 
     def test_refuses_root_without_flag(self, tmp_path):
         out = tmp_path / "b.tar.gz"
-        result = _run_package(out, {"ARANGO_USERNAME": "root", "ARANGO_PASSWORD": "x"})
+        root = {"ARANGO_USERNAME": "root", "ARANGO_PASSWORD": "x"}
+        result = _run_package(out, root, "--with-credentials")
         assert result.returncode != 0 and "root" in result.stderr
         assert not out.exists()
-        assert _run_package(out, {"ARANGO_USERNAME": "root", "ARANGO_PASSWORD": "x"},
-                            "--allow-root").returncode == 0
+        assert _run_package(out, root, "--with-credentials", "--allow-root").returncode == 0
+
+    def test_default_bundle_ignores_a_root_account_in_the_environment(self, tmp_path):
+        out = tmp_path / "b.tar.gz"
+        result = _run_package(out, {"ARANGO_USERNAME": "root", "ARANGO_PASSWORD": "x"})
+        assert result.returncode == 0, result.stderr
+        assert "ARANGO_USERNAME" not in _baked_env(out)
 
     def test_refuses_loopback_endpoint(self, tmp_path):
         result = _run_package(tmp_path / "b.tar.gz",
@@ -245,13 +288,34 @@ class TestPreflight:
     def test_good_bundle_passes(self, bundle):
         byoc.preflight(bundle, "chronograph", "testdb")
 
+    def test_good_credentialed_bundle_passes(self, credentialed_bundle):
+        byoc.preflight(credentialed_bundle, "chronograph", "testdb")
+
+    def test_which_bundles_carry_credentials(self, bundle, credentialed_bundle):
+        assert not byoc.carries_credentials(byoc.read_baked_env(bundle))
+        assert byoc.carries_credentials(byoc.read_baked_env(credentialed_bundle))
+
+    def test_an_account_without_its_password(self, credentialed_bundle, tmp_path):
+        env = "\n".join(l for l in _read(credentialed_bundle, ".env").splitlines()
+                        if not l.startswith("ARANGO_PASSWORD="))
+        bad = _rewrite(credentialed_bundle, tmp_path / "nopw.tar.gz", {".env": env})
+        with pytest.raises(byoc.DeployError, match="ARANGO_PASSWORD missing"):
+            byoc.preflight(bad, "chronograph", "testdb")
+
+    def test_an_account_with_platform_login_left_on(self, credentialed_bundle, tmp_path):
+        env = _read(credentialed_bundle, ".env").replace("CHRONO_PLATFORM_AUTH=off\n", "")
+        bad = _rewrite(credentialed_bundle, tmp_path / "on.tar.gz", {".env": env})
+        with pytest.raises(byoc.DeployError, match="platform login on"):
+            byoc.preflight(bad, "chronograph", "testdb")
+
     def test_wrong_mount_path(self, bundle):
         with pytest.raises(byoc.DeployError, match="SERVICE_URL_PATH_PREFIX"):
             byoc.preflight(bundle, "chronograph", "otherdb")
 
-    def test_root_account(self, bundle, tmp_path):
-        env = _read(bundle, ".env").replace("ARANGO_USERNAME=chrono-svc", "ARANGO_USERNAME=root")
-        bad = _rewrite(bundle, tmp_path / "root.tar.gz", {".env": env})
+    def test_root_account(self, credentialed_bundle, tmp_path):
+        env = _read(credentialed_bundle, ".env").replace("ARANGO_USERNAME=chrono-svc",
+                                                         "ARANGO_USERNAME=root")
+        bad = _rewrite(credentialed_bundle, tmp_path / "root.tar.gz", {".env": env})
         with pytest.raises(byoc.DeployError, match="root account"):
             byoc.preflight(bad, "chronograph", "testdb")
         byoc.preflight(bad, "chronograph", "testdb", allow_root=True)
@@ -308,6 +372,6 @@ class TestAccountScope:
             byoc.check_account_scope(stub, "chronograph", "testdb")
 
 
-def test_read_baked_env(bundle):
-    env = byoc.read_baked_env(bundle)
+def test_read_baked_env(credentialed_bundle):
+    env = byoc.read_baked_env(credentialed_bundle)
     assert env["ARANGO_USERNAME"] == "chrono-svc" and env["CHRONO_SOURCE"] == "arango"

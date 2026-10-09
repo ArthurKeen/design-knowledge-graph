@@ -12,6 +12,8 @@ python-arango objects.
 from __future__ import annotations
 
 import base64
+import importlib.machinery
+import importlib.util
 import json
 import sys
 import threading
@@ -265,3 +267,32 @@ class TestDiagnostics:
         body = client.get("/api/platform/diagnostics").json()
         assert body["forwarded_login"] is None and "direct_request" not in body["tls"]
 
+
+def _load_entrypoint():
+    path = VIZ_DIR / "deploy" / "entrypoint"
+    loader = importlib.machinery.SourceFileLoader("chronograph_entrypoint", str(path))
+    spec = importlib.util.spec_from_loader("chronograph_entrypoint", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+class TestEntrypoint:
+    entry = _load_entrypoint()
+
+    def test_platform_login_needs_no_password(self):
+        env = {"ARANGO_DEPLOYMENT_ENDPOINT": "https://c.svc:8529"}
+        assert self.entry._platform_login(env)
+        assert self.entry._login_problem(env) is None
+
+    def test_a_credentialed_bundle_turns_platform_login_off(self):
+        env = {"ARANGO_DEPLOYMENT_ENDPOINT": "https://c.svc:8529", "CHRONO_PLATFORM_AUTH": "off",
+               "ARANGO_ENDPOINT": "https://c.example", "ARANGO_PASSWORD": "pw"}
+        assert not self.entry._platform_login(env)
+        assert self.entry._login_problem(env) is None
+
+    def test_no_login_at_all_is_refused_with_the_fix(self):
+        for env in ({}, {"ARANGO_DEPLOYMENT_ENDPOINT": "https://c.svc:8529",
+                         "CHRONO_PLATFORM_AUTH": "off"}):
+            problem = self.entry._login_problem(env)
+            assert problem and "--with-credentials" in problem
